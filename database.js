@@ -1,8 +1,8 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 
-// Initialize the SQLite database
-const db = new Database(path.join(__dirname, 'agent.db'));
+// Initialize the SQLite database in the root directory
+const db = new Database(path.join(__dirname, '..', '..', 'agent.db'));
 
 // Enable WAL mode for better performance
 db.pragma('journal_mode = WAL');
