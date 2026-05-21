@@ -7,7 +7,7 @@ import { initializeDatabase } from './src/config/database.js';
 
 // Import the bot from your modular structure
 // (Adjust this path if your telegram.js is inside a folder like src/bot/)
-import { initializeBot } from './telegram.js'; 
+import { initializeBot } from './src/bot/telegram.js'; 
 
 initializeDatabase();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
