@@ -2,9 +2,9 @@ import Groq from "groq-sdk";
 import 'dotenv/config';
 import { logTransaction, editTransaction } from '../tools/finance.js';
 import { analyzeFinances } from '../tools/analyze.js';
-// Remove: import { saveMemory, fetchMemories } from '../tools/memory.js';
-// Replace with:
 import { upsertMemoryNode, fetchMemories, findConflictingNodes, getMemoryHistory } from '../tools/memory.js';
+
+import { ingestGoogleSheet } from '../tools/workspace.js';
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -97,6 +97,20 @@ const tools = [
     {
         type: "function",
         function: {
+            name: "ingestGoogleSheet",
+            description: "Extracts all tabs and rows from a Google Sheet and migrates them into the SQLite financial database.",
+            parameters: {
+                type: "object",
+                properties: {
+                    spreadsheet_id: { type: "string", description: "The Google Sheet ID extracted from the URL." }
+                },
+                required: ["spreadsheet_id"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
             name: "getMemoryHistory",
             description: "Get the complete audit trail and past versions of a specific memory key.",
             parameters: {
@@ -162,6 +176,7 @@ export async function generateResponse(prompt, messageId) {
                 else if (toolCall.function.name === "upsert_memory_node") apiResponse = await upsertMemoryNode(args);
                 else if (toolCall.function.name === "findConflictingNodes") apiResponse = await findConflictingNodes(args);
                 else if (toolCall.function.name === "getMemoryHistory") apiResponse = await getMemoryHistory(args);
+                else if (toolCall.function.name === "ingestGoogleSheet") apiResponse = await ingestGoogleSheet(args);
 
                 messages.push({
                     tool_call_id: toolCall.id,
