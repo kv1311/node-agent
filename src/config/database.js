@@ -1,13 +1,11 @@
-import Database from 'better-sqlite3';
-import { v4 as uuidv4 } from 'uuid'; // We use this for unique Node/Edge IDs
+import { createClient } from '@libsql/client';
 
-// Initialize the single database instance
-const db = new Database('agent.db');
-db.pragma('journal_mode = WAL');
+const db = createClient({
+    url: 'file:agent.db',
+});
 
-export function initializeDatabase() {
-    db.exec(`
-        -- 1. THE DETERMINISTIC ENGINE
+export async function initializeDatabase() {
+    await db.executeMultiple(`
         CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             message_id TEXT UNIQUE,
@@ -29,12 +27,11 @@ export function initializeDatabase() {
             last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
         );
 
-        -- 2. THE OBSIDIAN MEMORY GRAPH
         CREATE TABLE IF NOT EXISTS Nodes (
             id TEXT PRIMARY KEY,
             label TEXT NOT NULL,
             type TEXT NOT NULL,
-            metadata TEXT, -- Stored as a JSON blob
+            metadata TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -48,35 +45,23 @@ export function initializeDatabase() {
             FOREIGN KEY(source_id) REFERENCES Nodes(id),
             FOREIGN KEY(target_id) REFERENCES Nodes(id)
         );
-
-        -- 3. SYSTEM CONFIG
-        CREATE TABLE IF NOT EXISTS user_config (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_chat_id TEXT UNIQUE
-        );
     `);
-    console.log("[SYSTEM] 🧠 SQLite Memory Graph & Master Schema Initialized.");
+    console.log("[SYSTEM] 🧠 SQLite (LibSQL) Memory Graph & Master Schema Initialized.");
 }
 
-// --- ROLLUP UTILITY (Called automatically when transactions are logged) ---
-export function updateMonthlyRollup(dateStr, amount, type, owner) {
-    // Extract YYYY-MM from standard timestamp
+export async function updateMonthlyRollup(dateStr, amount, type, owner) {
     const month = dateStr.substring(0, 7); 
     
-    // Ensure the row exists for this month
-    db.prepare(`INSERT OR IGNORE INTO monthly_rollups (month) VALUES (?)`).run(month);
+    await db.execute({ sql: `INSERT OR IGNORE INTO monthly_rollups (month) VALUES (?)`, args: [month] });
 
     if (type === 'inflow') {
-        db.prepare(`UPDATE monthly_rollups SET total_inflow = total_inflow + ?, last_updated = CURRENT_TIMESTAMP WHERE month = ?`).run(amount, month);
+        await db.execute({ sql: `UPDATE monthly_rollups SET total_inflow = total_inflow + ?, last_updated = CURRENT_TIMESTAMP WHERE month = ?`, args: [amount, month] });
     } else if (type === 'outflow') {
-        db.prepare(`UPDATE monthly_rollups SET total_outflow = total_outflow + ?, last_updated = CURRENT_TIMESTAMP WHERE month = ?`).run(amount, month);
-        
-        // Dynamically track the uncle pool
+        await db.execute({ sql: `UPDATE monthly_rollups SET total_outflow = total_outflow + ?, last_updated = CURRENT_TIMESTAMP WHERE month = ?`, args: [amount, month] });
         if (owner === 'uncle') {
-            db.prepare(`UPDATE monthly_rollups SET uncle_investment_total = uncle_investment_total + ? WHERE month = ?`).run(amount, month);
+            await db.execute({ sql: `UPDATE monthly_rollups SET uncle_investment_total = uncle_investment_total + ? WHERE month = ?`, args: [amount, month] });
         }
     }
 }
 
-// Export the db instance so other files don't lock the database by calling "new Database()"
 export default db;

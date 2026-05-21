@@ -2,37 +2,28 @@ import { Telegraf } from 'telegraf';
 import 'dotenv/config';
 import { generateResponse } from '../ai/gemini.js';
 
-export function initializeBot() {
-    const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+let bot;
 
-    // Initial setup listener
+export function initializeBot() {
+    bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+
     bot.start((ctx) => {
-        const chatId = ctx.chat.id;
         const firstName = ctx.from.first_name;
-        
-        console.log(`[SYSTEM] Captured new Chat ID: ${chatId} for user ${firstName}`);
-        // We will wire up the SQLite database insert here later
-        
-        ctx.reply(`Initialization complete, ${firstName}. My Gemini brain is connected.`);
+        ctx.reply(`Initialization complete, ${firstName}. My Gemini brain is connected via Webhook.`);
     });
 
-    // Listen for regular messages
     bot.on('text', async (ctx) => {
         const userMessage = ctx.message.text;
+        const messageId = ctx.message.message_id.toString(); 
         
-        // Show a "typing..." indicator in Telegram
         ctx.sendChatAction('typing');
         
-        // Send message to Gemini and wait for the response
-        const aiResponse = await generateResponse(userMessage);
-        
-        // Reply back to you in Telegram
+        const aiResponse = await generateResponse(userMessage, messageId);
         ctx.reply(aiResponse);
     });
 
-    bot.launch();
-    
-    // Graceful stops for Node
     process.once('SIGINT', () => bot.stop('SIGINT'));
     process.once('SIGTERM', () => bot.stop('SIGTERM'));
 }
+
+export const getBot = () => bot;

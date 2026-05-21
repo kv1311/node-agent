@@ -2,8 +2,6 @@ import db from '../config/database.js';
 
 export async function analyzeFinances({ time_frame, type_filter = 'all' }) {
     try {
-        console.log(`\n[DB] 🔍 AI is analyzing finances. Timeframe: ${time_frame}, Filter: ${type_filter}`);
-        
         let query = `SELECT amount, type, category, description, account_source, date FROM transactions WHERE 1=1`;
         const params = [];
 
@@ -20,19 +18,15 @@ export async function analyzeFinances({ time_frame, type_filter = 'all' }) {
 
         query += ` ORDER BY date DESC LIMIT 50`;
 
-        const stmt = db.prepare(query);
-        const results = stmt.all(...params);
+        const result = await db.execute({ sql: query, args: params });
+        const results = result.rows;
 
-        console.log(`[DB] ✅ Found ${results.length} records.`);
-        
-        // FIX: Return a clean object, not a string!
         return {
             status: "success",
             record_count: results.length,
             data: results
         };
     } catch (error) {
-        console.error("Analyze Finances Error:", error);
-        return JSON.stringify({ error: error.message });
+        return { status: "error", message: error.message };
     }
 }

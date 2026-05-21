@@ -1,22 +1,24 @@
 import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
+import fs from 'fs';
 import 'dotenv/config';
 import { logTransaction } from '../tools/finance.js';
 import { analyzeFinances } from '../tools/analyze.js';
 
+const userProfile = JSON.parse(fs.readFileSync('./profile.json', 'utf8'));
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 const financeTool = {
     name: "logTransaction",
-    description: "Logs a financial transaction into the local SQLite database and Google Sheets. You MUST use this tool whenever the user mentions spending, buying, paying, receiving, or investing money.",
+    description: `Logs a financial transaction. Use this whenever the user spends or invests. If the user mentions investing ${userProfile.currency}${userProfile.investment_pools.uncle.target_monthly} for their Uncle, strictly set the 'owner' parameter to 'uncle'.`,
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
-            amount: { type: SchemaType.NUMBER, description: "The transaction amount in INR (e.g., 1080.75)." },
-            type: { type: SchemaType.STRING, description: "Must be exactly 'outflow' (if they paid/spent) or 'inflow' (if they received)." },
-            category: { type: SchemaType.STRING, description: "The internal category, such as 'food', 'loan', 'mutual funds'." },
-            description: { type: SchemaType.STRING, description: "A short description matching the user's input (e.g., 'Family dinner')." },
-            owner: { type: SchemaType.STRING, description: "Defaults to 'personal'." },
-            account_source: { type: SchemaType.STRING, description: "Identify how this was paid (e.g., 'Unity SF', 'HDFC', 'Slice', 'Kotak'). Default to 'unknown'." }
+            amount: { type: SchemaType.NUMBER, description: `Amount in ${userProfile.currency}.` },
+            type: { type: SchemaType.STRING, description: "Exactly 'outflow' or 'inflow'." },
+            category: { type: SchemaType.STRING, description: `Must be one of: ${userProfile.custom_categories.join(', ')}` },
+            description: { type: SchemaType.STRING, description: "Short description (e.g., 'Family dinner')." },
+            owner: { type: SchemaType.STRING, description: "Defaults to 'personal', but set to 'uncle' if tracking his funds." },
+            account_source: { type: SchemaType.STRING, description: "e.g., 'HDFC', 'Zerodha'. Default: 'unknown'." }
         },
         required: ["amount", "type", "category", "description"]
     }
@@ -24,91 +26,50 @@ const financeTool = {
 
 const analyzeTool = {
     name: "analyzeFinances",
-    description: "Reads the user's financial history from the database. Use this when the user asks questions like 'How much did I spend?', 'What are my expenses?', or 'Show my recent transactions'.",
+    description: "Queries the SQLite database to answer questions about past spending.",
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
-            time_frame: { 
-                type: SchemaType.STRING, 
-                description: "Must be exactly 'current_month', 'last_month', or 'all_time'." 
-            },
-            type_filter: { 
-                type: SchemaType.STRING, 
-                description: "Must be exactly 'inflow', 'outflow', or 'all'. Default is 'all'." 
-            }
+            time_frame: { type: SchemaType.STRING, description: "'current_month', 'last_month', or 'all'" },
+            type_filter: { type: SchemaType.STRING, description: "'inflow', 'outflow', or 'all'" }
         },
-        required: ["time_frame", "type_filter"]
+        required: ["time_frame"]
     }
 };
 
-const model = genAI.getGenerativeModel({ 
-    model: "gemini-2.5-flash-lite",
+const model = genAI.getGenerativeModel({
+    model: "gemini-1.5-flash",
     tools: [{ functionDeclarations: [financeTool, analyzeTool] }],
-    // FIX: Make the instruction incredibly strict about answering questions.
-    systemInstruction: "You are a highly intelligent financial agent. If the user logs a transaction, confirm it. If they ask a question about their finances (like 'Can I afford this?'), you MUST use analyzeFinances, read the returned data, do the math, and give them a detailed, conversational answer. NEVER leave the user hanging."
+    systemInstruction: `You are the personal assistant for ${userProfile.name}. You must use tools to log or retrieve data. Never make up numbers.`
 });
 
-export async function generateResponse(userMessage, messageId) {
+export async function generateResponse(prompt, messageId) {
     try {
         const chat = model.startChat();
-        
-        let result = await chat.sendMessage(userMessage);
+        let result = await chat.sendMessage(prompt);
         let response = result.response;
-        
-        const calls = response.functionCalls();
-        
-        if (calls && calls.length > 0) {
-            const call = calls[0];
+
+        if (response.functionCalls && response.functionCalls().length > 0) {
+            const call = response.functionCalls()[0];
             
             if (call.name === "logTransaction") {
-                console.log(`\n[SYSTEM] 🧠 AI executing logTransaction...`);
                 const apiResponse = await logTransaction(call.args, messageId);
+                apiResponse._instruction = "Confirm to the user that the transaction was logged perfectly.";
                 
-                // THE FIX: We pass ONLY the functionResponse, but sneak our instruction inside the JSON response!
-                result = await chat.sendMessage([{ 
-                    functionResponse: { 
-                        name: "logTransaction", 
-                        response: { 
-                            result: apiResponse,
-                            _instruction: "The transaction was just logged. You MUST reply to the user confirming it was saved successfully in a friendly tone."
-                        } 
-                    } 
-                }]);
+                result = await chat.sendMessage([{ functionResponse: { name: "logTransaction", response: apiResponse } }]);
                 response = result.response;
-            }
-            else if (call.name === "analyzeFinances") {
-                console.log(`\n[SYSTEM] 🧠 AI executing analyzeFinances...`);
+            } else if (call.name === "analyzeFinances") {
                 const apiResponse = await analyzeFinances(call.args);
+                apiResponse._instruction = "Read the data array, do the math, and give the user a clear, conversational answer.";
                 
-                // THE FIX: Trojan horse the instruction into the database results
-                apiResponse._instruction = "Here is the data. You MUST read these numbers, do the math, and give the user a clear, conversational answer to their original question right now. Do not remain silent.";
-                
-                result = await chat.sendMessage([{ 
-                    functionResponse: { 
-                        name: "analyzeFinances", 
-                        response: apiResponse 
-                    } 
-                }]);
+                result = await chat.sendMessage([{ functionResponse: { name: "analyzeFinances", response: apiResponse } }]);
                 response = result.response;
             }
         }
         
-        try {
-            const finalReply = response.text();
-            if (finalReply && finalReply.trim() !== '') {
-                return finalReply;
-            }
-        } catch (textError) {
-            console.error("AI refused to generate text:", textError);
-        }
-        
-        return "✅ Task completed in the database, but my language module forgot to reply!";
-        
+        return response.text() || "✅ Task completed in the database, but my language module forgot to reply!";
     } catch (error) {
         console.error("Gemini API Error:", error.message);
-        if (error.message.includes('503') || error.message.includes('429')) {
-            return "⏳ My AI brain is currently experiencing high traffic. Give me a few seconds!";
-        }
         return "Sorry, my brain encountered an error processing that.";
     }
 }
