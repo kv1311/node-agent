@@ -26,20 +26,26 @@ app.get('/api/logs', async (req, res) => {
     }
 });
 
-// --- 2. SETUP TELEGRAM WEBHOOK ---
+// --- 2. SETUP TELEGRAM BOT & ENVIRONMENT ---
 initializeBot();
 const bot = getBot();
 
-// Secret path so random scanners can't hit your bot
-const WEBHOOK_PATH = `/telegraf/${process.env.TELEGRAM_BOT_TOKEN}`;
-app.use(bot.webhookCallback(WEBHOOK_PATH));
+if (process.env.ENVIRONMENT === 'production') {
+    // 🌍 SERVER MODE: Use Webhook
+    const WEBHOOK_PATH = `/telegraf/${process.env.TELEGRAM_BOT_TOKEN}`;
+    app.use(bot.webhookCallback(WEBHOOK_PATH));
+    
+    const DOMAIN = 'https://unsoiled-fifty-overcome.ngrok-free.dev'; 
+    bot.telegram.setWebhook(`${DOMAIN}${WEBHOOK_PATH}`);
+    console.log(`[SYSTEM] 🔗 Webhook mapped to ${DOMAIN}${WEBHOOK_PATH}`);
+} else {
+    // 💻 LOCAL MODE: Use Long-Polling
+    bot.launch();
+    console.log(`[SYSTEM] 💻 Local polling started. Webhook ignored.`);
+}
 
-// Set this to your Cloudflare Tunnel URL!
-const DOMAIN = 'https://unsoiled-fifty-overcome.ngrok-free.dev';
-bot.telegram.setWebhook(`${DOMAIN}${WEBHOOK_PATH}`);
-
+// --- 3. START THE SERVER ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`\n🏛️ Agent Dashboard running on http://localhost:${PORT}`);
-    console.log(`[SYSTEM] 🔗 Webhook listening at ${DOMAIN}${WEBHOOK_PATH}`);
 });

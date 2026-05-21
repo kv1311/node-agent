@@ -1,30 +1,65 @@
 import Groq from "groq-sdk";
-import fs from 'fs';
 import 'dotenv/config';
-import { logTransaction } from '../tools/finance.js';
+import { logTransaction, editTransaction } from '../tools/finance.js';
 import { analyzeFinances } from '../tools/analyze.js';
+import { saveMemory, fetchMemories } from '../tools/memory.js';
 
-const userProfile = JSON.parse(fs.readFileSync('./profile.json', 'utf8'));
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// Groq/OpenAI requires standard JSON Schema for tools
+const conversationHistory = [];
+const MAX_HISTORY = 10; // Keeps the last 5 turns (user + assistant)
+
 const tools = [
     {
         type: "function",
         function: {
-            name: "logTransaction",
-            description: `Logs a financial transaction. Use this whenever the user spends or invests. If the user mentions investing ${userProfile.currency}${userProfile.investment_pools.uncle.target_monthly} for their Uncle, strictly set the 'owner' parameter to 'uncle'.`,
+            name: "upsert_memory_node",
+            description: "Save or update a memory fact. Use a strict canonical_key. Automatically replaces outdated facts.",
             parameters: {
                 type: "object",
                 properties: {
-                    amount: { type: "number", description: `Amount in ${userProfile.currency}.` },
+                    canonical_key: { type: "string", description: "Format 'category:specific_item' (e.g., 'finance:hdfc_cc_limit', 'finance:uncle_investment_target')" },
+                    label: { type: "string", description: "The human-readable fact (e.g., 'HDFC Credit Card Limit is 1.5 Lakhs')" },
+                    type: { type: "string", description: "Must be 'finance', 'preference', or 'personal'" },
+                    metadata: { type: "object", description: "Optional key-value details." }
+                },
+                required: ["canonical_key", "label", "type"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "logTransaction",
+            description: "Logs a NEW financial transaction.",
+            parameters: {
+                type: "object",
+                properties: {
+                    amount: { type: "number", description: "Amount. MUST be a raw JSON number, not a string." },
                     type: { type: "string", enum: ["inflow", "outflow"], description: "Exactly 'outflow' or 'inflow'." },
-                    category: { type: "string", description: `Must be one of: ${userProfile.custom_categories.join(', ')}` },
-                    description: { type: "string", description: "Short description (e.g., 'Family dinner')." },
-                    owner: { type: "string", description: "Defaults to 'personal', but set to 'uncle' if tracking his funds." },
-                    account_source: { type: "string", description: "e.g., 'HDFC', 'Zerodha'. Default: 'unknown'." }
+                    category: { type: "string", description: "E.g., Food, Utilities, Investments, Tech." },
+                    description: { type: "string", description: "Short description (e.g., 'HDFC bill')." },
+                    owner: { type: "string", description: "Defaults to 'personal', but set to a specific name if the user mentions tracking funds for someone else." },
+                    account_source: { type: "string", description: "e.g., 'HDFC', 'Zerodha'. Default: 'unknown'." },
+                    date: { type: "string", description: "Optional. YYYY-MM-DD. Calculate this if user says 'yesterday'." }
                 },
                 required: ["amount", "type", "category", "description"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "editTransaction",
+            description: "Modifies an EXISTING transaction in the database. Use this if the user says 'change', 'update', or 'fix' an old log.",
+            parameters: {
+                type: "object",
+                properties: {
+                    search_description: { type: "string", description: "A keyword to find the old transaction (e.g., 'HDFC')." },
+                    new_amount: { type: "number", description: "The corrected amount. Raw JSON number." },
+                    new_date: { type: "string", description: "The corrected date in YYYY-MM-DD format." }
+                },
+                required: ["search_description"]
             }
         }
     },
@@ -36,23 +71,39 @@ const tools = [
             parameters: {
                 type: "object",
                 properties: {
-                    time_frame: { type: "string", enum: ["current_month", "last_month", "all"], description: "Time frame to filter." },
-                    type_filter: { type: "string", enum: ["inflow", "outflow", "all"], description: "Type of transaction." }
+                    time_frame: { type: "string", enum: ["current_month", "last_month", "all"] }
                 },
                 required: ["time_frame"]
             }
         }
-    }
+    },
 ];
 
 export async function generateResponse(prompt, messageId) {
     try {
+        const activeMemories = await fetchMemories();
+        const memoryContext = activeMemories.join(' | ');
+        const today = new Date();
+        const todayISO = today.toISOString().split('T')[0];
+
+        // 2. INJECT HISTORY INTO THE MESSAGES
         const messages = [
-            { role: "system", content: `You are the personal assistant for ${userProfile.name}. You must use tools to log or retrieve data. Never make up numbers.` },
+            { 
+                role: "system", 
+                content: `You are the personal assistant for Kamalavasanthan. 
+                Today's date is: ${todayISO}. 
+                
+                LONG TERM MEMORY FACTS: [ ${memoryContext} ]
+                
+                CRITICAL RULES:
+                1. CALL ONLY ONE TOOL AT A TIME. 
+                2. THE CONFIRMATION LOOP: Draft new transactions and ask the user for confirmation first. ONLY execute 'logTransaction' AFTER the user says yes.
+                3. If the user wants to correct a past mistake, use editTransaction.`
+            },
+            ...conversationHistory, // <-- Spreads the recent chat history here
             { role: "user", content: prompt }
         ];
 
-        // We use Llama 3.3 70B as it is heavily optimized for perfect tool calling on Groq
         const response = await groq.chat.completions.create({
             model: "llama-3.3-70b-versatile",
             messages: messages,
@@ -62,21 +113,19 @@ export async function generateResponse(prompt, messageId) {
 
         const responseMessage = response.choices[0].message;
 
-        // If the AI decides it needs to use a tool (like logTransaction)
         if (responseMessage.tool_calls) {
-            messages.push(responseMessage); // Add the AI's tool request to the history
+            // ... exact same tool execution loop ...
+            messages.push(responseMessage);
 
             for (const toolCall of responseMessage.tool_calls) {
                 const args = JSON.parse(toolCall.function.arguments);
                 let apiResponse;
+                
+                if (toolCall.function.name === "logTransaction") apiResponse = await logTransaction(args, messageId);
+                else if (toolCall.function.name === "analyzeFinances") apiResponse = await analyzeFinances(args);
+                else if (toolCall.function.name === "upsert_memory_node") apiResponse = await upsertMemoryNode(args);
+                else if (toolCall.function.name === "editTransaction") apiResponse = await editTransaction(args);
 
-                if (toolCall.function.name === "logTransaction") {
-                    apiResponse = await logTransaction(args, messageId);
-                } else if (toolCall.function.name === "analyzeFinances") {
-                    apiResponse = await analyzeFinances(args);
-                }
-
-                // Push the tool's result back to the AI
                 messages.push({
                     tool_call_id: toolCall.id,
                     role: "tool",
@@ -85,19 +134,27 @@ export async function generateResponse(prompt, messageId) {
                 });
             }
 
-            // Let the AI read the database response and formulate a human reply
             const finalResponse = await groq.chat.completions.create({
                 model: "llama-3.3-70b-versatile",
                 messages: messages
             });
 
-            return finalResponse.choices[0].message.content || "✅ Task completed in the database.";
+            // 3. SAVE THE INTERACTION TO HISTORY
+            conversationHistory.push({ role: "user", content: prompt });
+            conversationHistory.push({ role: "assistant", content: finalResponse.choices[0].message.content });
+            if (conversationHistory.length > MAX_HISTORY) conversationHistory.splice(0, 2);
+
+            return finalResponse.choices[0].message.content || "✅ Task completed.";
         }
 
-        // If no tool was needed, just return the conversation
+        // 3. SAVE THE INTERACTION TO HISTORY (If no tools were used)
+        conversationHistory.push({ role: "user", content: prompt });
+        conversationHistory.push({ role: "assistant", content: responseMessage.content });
+        if (conversationHistory.length > MAX_HISTORY) conversationHistory.splice(0, 2);
+
         return responseMessage.content || "I couldn't process that.";
     } catch (error) {
-        console.error("Groq API Error:", error.message);
-        return "Sorry, my brain encountered an error processing that.";
+        console.error("API Error:", error.message);
+        return "Sorry, my brain encountered an error.";
     }
 }

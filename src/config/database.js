@@ -28,24 +28,29 @@ export async function initializeDatabase() {
         );
 
         CREATE TABLE IF NOT EXISTS Nodes (
-            id TEXT PRIMARY KEY,
-            label TEXT NOT NULL,
-            type TEXT NOT NULL,
-            metadata TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
+                id TEXT PRIMARY KEY,
+                label TEXT,
+                type TEXT,
+                metadata TEXT,
+                canonical_key TEXT,
+                is_active INTEGER DEFAULT 1,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
 
         CREATE TABLE IF NOT EXISTS Edges (
-            id TEXT PRIMARY KEY,
-            source_id TEXT,
-            target_id TEXT,
-            relation TEXT NOT NULL,
-            weight REAL DEFAULT 1.0,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(source_id) REFERENCES Nodes(id),
-            FOREIGN KEY(target_id) REFERENCES Nodes(id)
-        );
-    `);
+                id TEXT PRIMARY KEY,
+                source_id TEXT,
+                target_id TEXT,
+                relation TEXT,
+                weight REAL DEFAULT 1.0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(source_id) REFERENCES Nodes(id),
+                FOREIGN KEY(target_id) REFERENCES Nodes(id)
+            )
+
+        CREATE UNIQUE INDEX IF NOT EXISTS unique_edge ON Edges(source_id, target_id, relation)
+    
+     `);
     console.log("[SYSTEM] 🧠 SQLite (LibSQL) Memory Graph & Master Schema Initialized.");
 }
 
