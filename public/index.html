@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent God-Mode Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: { 
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                    }
+                } 
+            }
+        }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        * { transition: background-color 0.2s ease, border-color 0.2s ease; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 dark:bg-[#0A0A0A] dark:text-gray-100 min-h-screen flex flex-col md:flex-row">
+
+    <aside class="w-full md:w-64 bg-white dark:bg-[#111111] border-b md:border-b-0 md:border-r border-gray-200 dark:border-neutral-800 p-6 flex flex-col justify-between shrink-0 sticky top-0 z-10 md:h-screen">
+        <div>
+            <div class="flex items-center justify-between md:mb-10">
+                <h1 class="text-xl font-bold tracking-tight">AgentOS</h1>
+                <button class="md:hidden p-2 text-gray-500 hover:text-gray-900 dark:hover:text-white">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+                </button>
+            </div>
+            
+            <nav class="space-y-1 hidden md:block">
+                <a href="#" class="flex items-center gap-3 px-3 py-2 rounded-md bg-gray-100 dark:bg-neutral-800 text-sm font-medium">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"></path></svg>
+                    Transactions
+                </a>
+                <a href="#" class="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-gray-50 dark:hover:bg-neutral-900 text-sm font-medium text-gray-600 dark:text-gray-400">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                    Settings
+                </a>
+            </nav>
+        </div>
+        
+        <div class="hidden md:flex items-center justify-between border-t border-gray-200 dark:border-neutral-800 pt-4 mt-auto">
+            <div class="flex items-center gap-3">
+                <div class="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-sm font-bold">K</div>
+                <div class="text-xs">
+                    <p class="font-semibold">Kamalavasanthan</p>
+                    <p class="text-gray-500 dark:text-gray-400">Admin</p>
+                </div>
+            </div>
+            <button id="themeToggle" class="p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-neutral-800 text-gray-500 dark:text-gray-400">
+                <svg class="w-4 h-4 hidden dark:block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                <svg class="w-4 h-4 block dark:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
+            </button>
+        </div>
+    </aside>
+
+    <main class="flex-1 p-4 md:p-8 w-full max-w-6xl mx-auto">
+        <div class="space-y-6">
+            <header class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                    <h2 class="text-2xl font-bold tracking-tight">Recent Activity</h2>
+                    <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Review your latest automated financial logs.</p>
+                </div>
+                <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-100 dark:bg-green-500/10 text-green-700 dark:text-green-400 text-xs font-semibold border border-green-200 dark:border-green-500/20 w-max">
+                    <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
+                    Agent Connected
+                </div>
+            </header>
+
+            <div class="bg-white dark:bg-[#111111] rounded-xl border border-gray-200 dark:border-neutral-800 overflow-hidden shadow-sm">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm">
+                        <thead>
+                            <tr class="border-b border-gray-200 dark:border-neutral-800 bg-gray-50/50 dark:bg-neutral-900/30 text-gray-500 dark:text-gray-400">
+                                <th class="px-6 py-3 font-medium">Date</th>
+                                <th class="px-6 py-3 font-medium">Description</th>
+                                <th class="px-6 py-3 font-medium">Status</th>
+                                <th class="px-6 py-3 font-medium">Account</th>
+                                <th class="px-6 py-3 font-medium text-right">Amount</th>
+                            </tr>
+                        </thead>
+                        <tbody id="logsTableBody" class="divide-y divide-gray-100 dark:divide-neutral-800/50">
+                            <tr><td colspan="5" class="px-6 py-8 text-center text-gray-500 dark:text-gray-400">Fetching logs...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const htmlEl = document.documentElement;
+        const themeBtn = document.getElementById('themeToggle');
+        
+        themeBtn.addEventListener('click', () => {
+            htmlEl.classList.toggle('dark');
+        });
+
+        async function fetchLogs() {
+            try {
+                const response = await fetch('/api/logs');
+                const data = await response.json();
+                
+                const tbody = document.getElementById('logsTableBody');
+                tbody.innerHTML = ''; 
+
+                if (!data.data || data.data.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="px-6 py-8 text-center text-gray-500">No transactions recorded yet.</td></tr>';
+                    return;
+                }
+
+                data.data.forEach(log => {
+                    const dateObj = new Date(log.date);
+                    const formattedDate = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                    
+                    const isOutflow = log.type === 'outflow';
+                    const amountClass = isOutflow ? 'text-gray-900 dark:text-white' : 'text-green-600 dark:text-green-400';
+                    const sign = isOutflow ? '-' : '+';
+                    
+                    const badgeStyle = isOutflow 
+                        ? 'bg-gray-100 dark:bg-neutral-800 text-gray-600 dark:text-gray-300' 
+                        : 'bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400';
+
+                    const row = `
+                        <tr class="hover:bg-gray-50/50 dark:hover:bg-neutral-800/20 transition-colors">
+                            <td class="px-6 py-4 whitespace-nowrap text-gray-500 dark:text-gray-400">${formattedDate}</td>
+                            <td class="px-6 py-4 font-medium text-gray-900 dark:text-white">${log.description}</td>
+                            <td class="px-6 py-4">
+                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium uppercase tracking-wider ${badgeStyle}">
+                                    ${log.type}
+                                </span>
+                            </td>
+                            <td class="px-6 py-4 text-gray-500 dark:text-gray-400">${log.account_source}</td>
+                            <td class="px-6 py-4 text-right font-medium ${amountClass}">${sign}₹${log.amount.toFixed(2)}</td>
+                        </tr>
+                    `;
+                    tbody.innerHTML += row;
+                });
+            } catch (error) {
+                console.error('Failed to fetch logs:', error);
+            }
+        }
+
+        fetchLogs();
+    </script>
+</body>
+</html>

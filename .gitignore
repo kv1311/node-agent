@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Secrets & Keys (CRITICAL)
+.env
+google-credentials.json
+.cloudflared/
+
+# Databases
+agent.db
+agent.db-journal
+agent.db-wal
+agent.db-shm
