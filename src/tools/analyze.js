@@ -1,6 +1,4 @@
-import Database from 'better-sqlite3';
-
-const db = new Database('agent.db');
+import db from '../config/database.js';
 
 export async function analyzeFinances({ time_frame, type_filter = 'all' }) {
     try {

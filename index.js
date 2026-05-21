@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import 'dotenv/config';
-import { initializeDatabase } from './database.js';
+import { initializeDatabase } from './src/config/database.js';
 
 // Import the bot from your modular structure
 // (Adjust this path if your telegram.js is inside a folder like src/bot/)

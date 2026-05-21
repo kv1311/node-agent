@@ -1,7 +1,5 @@
 import { google } from 'googleapis';
-import Database from 'better-sqlite3';
-
-const db = new Database('agent.db');
+import db from '../src/config/database.js';
 
 
 const SHEET_ID = '1WrdRrKsoRtpdKSP_UPwfpfy7suCdJsEseVuCCCvhg8o';
