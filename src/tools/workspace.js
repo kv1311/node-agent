@@ -43,8 +43,6 @@ export async function ingestGoogleSheet({ spreadsheet_id }) {
                 // 1. Safely grab the amount as a string
                 const amountStr = String(row[4] || "");
 
-               const amountStr = String(row[4] || "");
-
                 if (!amountStr || !description) continue;
 
                 const cleanedAmount = amountStr.replace(/[^0-9.-]+/g, "");
