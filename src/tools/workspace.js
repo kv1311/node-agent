@@ -4,7 +4,7 @@ import db from '../config/database.js';
 import 'dotenv/config';
 
 const auth = new google.auth.GoogleAuth({
-    keyFile: 'credentials.json',
+    keyFile: 'google-credentials.json',
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
