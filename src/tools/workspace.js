@@ -35,16 +35,26 @@ export async function ingestGoogleSheet({ spreadsheet_id }) {
             for (let i = 1; i < rows.length; i++) {
                 const row = rows[i];
                 
-                const sheetDate = row[0];       
+               const sheetDate = row[0];       
                 const description = row[1];     
                 const type = row[2] || "outflow"; 
                 const account_source = row[3] || "unknown";
-                const amountStr = row[4];
+                
+                // 1. Safely grab the amount as a string
+                const amountStr = String(row[4] || "");
+
+               const amountStr = String(row[4] || "");
 
                 if (!amountStr || !description) continue;
 
-                const amount = parseFloat(amountStr.replace(/[^0-9.-]+/g, ""));
+                const cleanedAmount = amountStr.replace(/[^0-9.-]+/g, "");
+                const amount = parseFloat(cleanedAmount);
                 
+                // --- MISSING SAFETY CHECK GOES HERE ---
+                if (isNaN(amount)) {
+                    console.log(`[WARNING] Skipping row with invalid amount: ${amountStr}`);
+                    continue; 
+                }
                 let sqlDate = new Date().toISOString();
                 if (sheetDate) {
                     const parsedDate = new Date(sheetDate);

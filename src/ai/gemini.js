@@ -142,12 +142,12 @@ export async function generateResponse(prompt, messageId) {
                 
                 CRITICAL RULES:
                 1. CALL ONLY ONE TOOL AT A TIME. 
-                2. THE CONFIRMATION LOOP: Draft new transactions and ask the user for confirmation first. ONLY execute 'logTransaction' AFTER the user says yes.
+                2. THE CONFIRMATION LOOP: Draft new transactions and ask for confirmation first. ONLY execute 'logTransaction' AFTER the user says yes.
                 3. If the user wants to correct a past mistake, use editTransaction.
                 4. NEVER output raw <function=...> tags in your text.
-                5. THE MEMORY WORKFLOW: When saving a new fact, you MUST do it in two steps:
-                   - Step 1: First, use 'findConflictingNodes' to see if a similar canonical_key already exists.
-                   - Step 2: Read the result, then use 'upsert_memory_node' ensuring you reuse the exact same canonical_key if updating an existing concept.`
+                5. THE MEMORY WORKFLOW: When saving a new fact, use 'findConflictingNodes' first, then 'upsert_memory_node'.
+                6. GOOGLE SHEETS: You have secure backend access to Google Workspace. If the user provides a Google Sheets URL and asks to migrate or read it, DO NOT say you lack access. Extract the Spreadsheet ID from the URL and immediately call the 'ingestGoogleSheet' tool.`
+                   
             },
             ...conversationHistory,
             { role: "user", content: prompt }
