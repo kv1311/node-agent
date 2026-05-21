@@ -2,7 +2,9 @@ import Groq from "groq-sdk";
 import 'dotenv/config';
 import { logTransaction, editTransaction } from '../tools/finance.js';
 import { analyzeFinances } from '../tools/analyze.js';
-import { saveMemory, fetchMemories } from '../tools/memory.js';
+// Remove: import { saveMemory, fetchMemories } from '../tools/memory.js';
+// Replace with:
+import { upsertMemoryNode, fetchMemories, findConflictingNodes, getMemoryHistory } from '../tools/memory.js';
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -77,6 +79,35 @@ const tools = [
             }
         }
     },
+    {
+        type: "function",
+        function: {
+            name: "findConflictingNodes",
+            description: "Check if a similar memory already exists in the graph before saving to avoid duplicate concepts.",
+            parameters: {
+                type: "object",
+                properties: {
+                    label: { type: "string", description: "The concept you are checking for (e.g., 'HDFC')" },
+                    type: { type: "string", description: "The category (e.g., 'finance')" }
+                },
+                required: ["label", "type"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "getMemoryHistory",
+            description: "Get the complete audit trail and past versions of a specific memory key.",
+            parameters: {
+                type: "object",
+                properties: {
+                    canonical_key: { type: "string", description: "The exact key to look up (e.g., 'finance:hdfc_cc_limit')" }
+                },
+                required: ["canonical_key"]
+            }
+        }
+    }
 ];
 
 export async function generateResponse(prompt, messageId) {
@@ -98,9 +129,13 @@ export async function generateResponse(prompt, messageId) {
                 CRITICAL RULES:
                 1. CALL ONLY ONE TOOL AT A TIME. 
                 2. THE CONFIRMATION LOOP: Draft new transactions and ask the user for confirmation first. ONLY execute 'logTransaction' AFTER the user says yes.
-                3. If the user wants to correct a past mistake, use editTransaction.`
+                3. If the user wants to correct a past mistake, use editTransaction.
+                4. NEVER output raw <function=...> tags in your text.
+                5. THE MEMORY WORKFLOW: When saving a new fact, you MUST do it in two steps:
+                   - Step 1: First, use 'findConflictingNodes' to see if a similar canonical_key already exists.
+                   - Step 2: Read the result, then use 'upsert_memory_node' ensuring you reuse the exact same canonical_key if updating an existing concept.`
             },
-            ...conversationHistory, // <-- Spreads the recent chat history here
+            ...conversationHistory,
             { role: "user", content: prompt }
         ];
 
@@ -123,8 +158,10 @@ export async function generateResponse(prompt, messageId) {
                 
                 if (toolCall.function.name === "logTransaction") apiResponse = await logTransaction(args, messageId);
                 else if (toolCall.function.name === "analyzeFinances") apiResponse = await analyzeFinances(args);
-                else if (toolCall.function.name === "upsert_memory_node") apiResponse = await upsertMemoryNode(args);
                 else if (toolCall.function.name === "editTransaction") apiResponse = await editTransaction(args);
+                else if (toolCall.function.name === "upsert_memory_node") apiResponse = await upsertMemoryNode(args);
+                else if (toolCall.function.name === "findConflictingNodes") apiResponse = await findConflictingNodes(args);
+                else if (toolCall.function.name === "getMemoryHistory") apiResponse = await getMemoryHistory(args);
 
                 messages.push({
                     tool_call_id: toolCall.id,

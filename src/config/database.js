@@ -35,7 +35,7 @@ export async function initializeDatabase() {
                 canonical_key TEXT,
                 is_active INTEGER DEFAULT 1,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
+            );
 
         CREATE TABLE IF NOT EXISTS Edges (
                 id TEXT PRIMARY KEY,
@@ -46,9 +46,9 @@ export async function initializeDatabase() {
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(source_id) REFERENCES Nodes(id),
                 FOREIGN KEY(target_id) REFERENCES Nodes(id)
-            )
+            );
 
-        CREATE UNIQUE INDEX IF NOT EXISTS unique_edge ON Edges(source_id, target_id, relation)
+        CREATE UNIQUE INDEX IF NOT EXISTS unique_edge ON Edges(source_id, target_id, relation);
     
      `);
     console.log("[SYSTEM] 🧠 SQLite (LibSQL) Memory Graph & Master Schema Initialized.");
