@@ -38,7 +38,7 @@ const analyzeTool = {
 };
 
 const model = genAI.getGenerativeModel({
-    model: "gemini-1.5-flash",
+    model: "gemini-2.5-flash-lite",
     tools: [{ functionDeclarations: [financeTool, analyzeTool] }],
     systemInstruction: `You are the personal assistant for ${userProfile.name}. You must use tools to log or retrieve data. Never make up numbers.`
 });
