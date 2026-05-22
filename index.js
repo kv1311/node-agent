@@ -38,7 +38,7 @@ app.get('/api/logs', async (req, res) => {
     }
 });
 
-const { v4: uuidv4 } = require('uuid')
+import { v4 as uuidv4 } from 'uuid'
 // npm install uuid  ← run this if not installed
 
 // POST /api/tasks
