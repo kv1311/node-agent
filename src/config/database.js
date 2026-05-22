@@ -99,6 +99,19 @@ export async function initializeDatabase() {
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS journal (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            content TEXT NOT NULL,
+            mood TEXT DEFAULT '',
+            tags TEXT DEFAULT '',
+            source_session TEXT DEFAULT '',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_journal_created 
+        ON journal(created_at);
+
         CREATE INDEX IF NOT EXISTS idx_conversations_session 
         ON conversations(session_id, created_at);
     `);

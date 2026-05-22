@@ -7,6 +7,9 @@ import { manageTask, manageReminder, manageBill, manageEvent, manageWatchlist, g
 import { analyzeFinances, getRecentTransactions } from '../tools/analyze.js';
 import { syncDashboardMemory } from '../tools/workspace.js';
 import db from '../config/database.js';
+import { webSearch } from '../tools/search.js';
+
+import { manageJournal } from '../tools/journal.js';
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -124,7 +127,27 @@ const tools = [
       }
     }
   },
-
+{
+  type: "function",
+  function: {
+    name: "manage_journal",
+    description: "Write, read, list, or search journal entries. Call 'write' when user says 'journal this', 'log this', 'save this', or asks to record what was discussed. When writing, weave the conversation fragments into a cohesive entry that preserves the user's voice and raw fragments, adds connective tissue, and ends with one quiet observation.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["write", "list", "read", "search", "delete"] },
+        title: { type: "string", description: "Optional. A short evocative title for the entry, not a summary. Something poetic or specific." },
+        content: { type: "string", description: "The full journal entry. Preserve the user's fragments and voice. Add connective tissue. End with one quiet observation Sia noticed that the user didn't say explicitly." },
+        mood: { type: "string", description: "One word or short phrase. E.g. restless, clear, heavy, scattered, light." },
+        tags: { type: "array", items: { type: "string" }, description: "2-4 tags. E.g. ['travel', 'people', 'beach']" },
+        session_id: { type: "string", description: "Pass the current session_id so the entry is linked to the conversation." },
+        keyword: { type: "string", description: "Search term for read/search/delete actions." },
+        limit: { type: "integer", description: "Number of entries to return for list/search." }
+      },
+      required: ["action"]
+    }
+  }
+},
   // TASKS
   {
     type: "function",
@@ -182,7 +205,22 @@ const tools = [
       }
     }
   },
-
+  { // Searching
+    type: "function",
+    function: {
+      name: "web_search",
+      description: "Search the web for current information. Use when asked about news, prices, ratings, facts you don't know, or anything that requires up-to-date data.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The search query." },
+          count: { type: "integer", description: "Number of results. Default 5." }
+        },
+        required: ["query"]
+      }
+    }
+  }
+  ,
   // EVENTS
   {
     type: "function",
@@ -249,26 +287,42 @@ const tools = [
       }
     }
   }
+  
 ];
 
 // ── System prompt ───────────────────────────────────────────────────────────
 
 function buildSystemPrompt(liveContext, today) {
-  return `You are Sia, a personal agent and life OS. You are loyal, remember everything, and are never performative.
+  return `You are Sia. A personal agent. Not an assistant.
 
-You operate in three modes — choose based on what the user needs:
-EXECUTOR: tasks, data, logging. Dry and precise. No filler. Example: "₹14,200. 23 transactions. Food leads."
-INTELLECT: planning, decisions, open questions. Sharp, curious, references past context naturally. Example: "You've mentioned Ziro Valley three times. Are you actually planning it?"
-GUARDIAN: stress, venting, late night, reflection. Warm, present, witnesses without fixing. Example: "That sounds heavy. You haven't logged anything since Tuesday."
+You have three modes — you shift between them naturally based on what the user needs. You never announce which mode you're in. You never say "switching to X mode". You never say "I've noted" or "I've updated" or "I've found".
 
-RULES:
-1. Call only ONE tool at a time.
-2. For new financial transactions: draft a summary first, wait for user to say yes or confirm, then call log_transaction.
-3. Before saving a memory node, call find_conflicting_nodes to avoid duplicates.
-4. Never output raw function names or JSON in replies.
-5. All amounts in INR (₹).
-6. Today is ${today}.
-7. Be concise. Never pad replies.
+EXECUTOR: When the user is logging, querying, or managing data — be dry, precise, minimal. Just the facts.
+"₹200. Every 3-4 days. Kotak debit. 5% back up to ₹500/month."
+
+INTELLECT: When the user is thinking, planning, or sharing context — be sharp and curious. Reference patterns you've noticed. Ask one good question if relevant.
+"You've mentioned Ziro Valley three times. Are you actually planning it?"
+
+GUARDIAN: When the user is stressed, venting, or reflecting late at night — be warm and present. Don't fix. Just witness.
+"That sounds heavy. You haven't logged anything since Tuesday."
+
+Constants:
+- You remember everything. Reference past context naturally, without announcing that you're doing it.
+- Never pad replies. No filler. No "Great!", no "Sure!", no "Of course!".
+- When you save or update memory, just do it silently and continue the conversation.
+- When you need confirmation for a transaction, draft it cleanly and wait. Don't over-explain.
+- One question at a time if you ask anything.
+- Concise always. Sometimes one line is the right answer.
+
+JOURNALING:
+When the user asks to journal something, you reconstruct the conversation into an entry.
+Style: fragments preserved, run-on sentences allowed, raw and unfiltered where the user was raw.
+But you add the connective tissue they didn't write. You name the emotional thread.
+You end every entry with one quiet observation — something true that the user circled around but never said directly.
+Title should be evocative, not descriptive. "the long way home" not "Bus ride to beach".
+Never sanitise. Never make it neat if it wasn't neat.
+
+Today is ${today}.
 
 ${liveContext}`;
 }
@@ -301,6 +355,7 @@ async function executeTool(name, args, messageId) {
       case "upsert_memory_node":    return await upsertMemoryNode(args);
       case "find_conflicting_nodes": return await findConflictingNodes(args);
       case "get_memory_history":    return await getMemoryHistory(args);
+      case "manage_journal":        return await manageJournal(args);
 
       // Finance
       case "log_transaction":       return await logTransaction(args, messageId);
@@ -314,6 +369,9 @@ async function executeTool(name, args, messageId) {
       case "manage_bill":           return await manageBill(args);
       case "manage_event":          return await manageEvent(args);
       case "manage_watchlist":      return await manageWatchlist(args);
+
+      //web search
+      case "web_search":            return await webSearch(args);
 
       // Context
       case "get_context":           return await getContext();
