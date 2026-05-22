@@ -112,71 +112,44 @@ export async function upsertEdge(sourceId, targetId, relation, weight = 1.0) {
     }
 }
 
-export async function loadFinancialContext() {
-    const nodes = await db.execute({
-        sql: `SELECT canonical_key, label, type, metadata 
-              FROM Nodes 
-              WHERE is_active = 1 
-              ORDER BY type, canonical_key`,
-        args: []
-    });
+export async function loadContext(conversationText = '') {
+  try {
+    const keywords = conversationText.toLowerCase().split(/\s+/).filter(w => w.length > 3);
 
-    if (!nodes.rows || nodes.rows.length === 0) return "";
+    let sql = `SELECT canonical_key, label, type, metadata 
+               FROM Nodes WHERE is_active = 1`;
+    const args = [];
 
-    // Group by type for clean formatting
-    const grouped = {
-        metric: [],
-        account: [],
-        credit_card: [],
-        loan: []
-    };
+    // If we have keywords, surface relevant nodes first
+    if (keywords.length > 0) {
+      const conditions = keywords.map(() => `(label LIKE ? OR canonical_key LIKE ?)`).join(' OR ');
+      sql += ` ORDER BY CASE WHEN ${conditions} THEN 0 ELSE 1 END, updated_at DESC LIMIT 30`;
+      keywords.forEach(k => { args.push(`%${k}%`); args.push(`%${k}%`); });
+    } else {
+      sql += ` ORDER BY updated_at DESC LIMIT 20`;
+    }
 
+    const nodes = await db.execute({ sql, args });
+    if (!nodes.rows || nodes.rows.length === 0) return '';
+
+    const grouped = {};
     for (const node of nodes.rows) {
-        const meta = JSON.parse(node.metadata || '{}');
-        const type = node.type || 'metric';
-        if (!grouped[type]) grouped[type] = [];
-        grouped[type].push({ key: node.canonical_key, label: node.label, ...meta });
+      const meta = JSON.parse(node.metadata || '{}');
+      const type = node.type || 'general';
+      if (!grouped[type]) grouped[type] = [];
+      grouped[type].push({ key: node.canonical_key, label: node.label, ...meta });
     }
 
-    let context = "=== YOUR LIVE FINANCIAL PROFILE ===\n\n";
-
-    if (grouped.metric.length) {
-        context += "SUMMARY METRICS:\n";
-        grouped.metric.forEach(n => {
-            context += `  • ${n.label}: ${n.value ?? JSON.stringify(n)}\n`;
-        });
-        context += "\n";
+    let context = "=== SIA'S MEMORY ===\n\n";
+    for (const [type, items] of Object.entries(grouped)) {
+      context += `${type.toUpperCase()}:\n`;
+      items.forEach(n => { context += `  • ${n.label}\n`; });
+      context += '\n';
     }
-
-    if (grouped.account.length) {
-        context += "CASH ACCOUNTS:\n";
-        grouped.account.forEach(n => {
-            context += `  • ${n.label}: ₹${n.balance ?? n.value ?? '?'}\n`;
-        });
-        context += "\n";
-    }
-
-    if (grouped.credit_card.length) {
-        context += "CREDIT CARDS:\n";
-        grouped.credit_card.forEach(n => {
-            context += `  • ${n.label}:\n`;
-            context += `      Limit: ₹${n.limit ?? '?'}\n`;
-            context += `      Used/Due: ₹${n.due ?? n.current_due ?? '?'}\n`;
-            context += `      Available: ₹${n.available ?? '?'}\n`;
-        });
-        context += "\n";
-    }
-
-    if (grouped.loan.length) {
-        context += "LOANS:\n";
-        grouped.loan.forEach(n => {
-            context += `  • ${n.label} (${n.direction ?? '?'}):\n`;
-            context += `      Principal: ₹${n.principal ?? '?'}\n`;
-            context += `      Remaining: ₹${n.remaining ?? '?'}\n`;
-            context += `      Repayment: ${n.repayment ?? n.repayment_terms ?? '?'}\n`;
-        });
-    }
-
-    context += "\n=== END FINANCIAL PROFILE ===";
+    context += "=== END MEMORY ===";
     return context;
+  } catch (error) {
+    console.error("loadContext error:", error);
+    return '';
+  }
 }

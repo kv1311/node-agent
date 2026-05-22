@@ -88,6 +88,16 @@ export async function initializeDatabase() {
             genre TEXT DEFAULT '',
             watched INTEGER DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS conversations (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_conversations_session 
+        ON conversations(session_id, created_at);
     `);
 
     console.log("[SYSTEM] 🧠 SQLite (LibSQL) Memory Graph & Master Schema Initialized.");

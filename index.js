@@ -7,7 +7,7 @@ import { initializeDatabase } from './src/config/database.js';
 import db from './src/config/database.js';
 import { getBot, initializeBot } from './src/bot/telegram.js';
 
-import { generateResponse } from './src/ai/gemini.js';
+import { generateResponse } from './src/ai/groq.js';
 
 import { v4 as uuidv4 } from 'uuid';
 
@@ -36,11 +36,10 @@ app.get('/api/tasks', async (req, res) => {
   }
 });
 
-
 app.post('/api/chat', async (req, res) => {
-  const { message } = req.body;
+  const { message, session_id } = req.body;
   try {
-    const reply = await generateResponse(message, null);
+    const reply = await generateResponse(message, null, session_id || 'web-default');
     res.json({ reply });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -154,6 +153,56 @@ app.post('/api/watchlist', async (req, res) => {
   }
 });
 
+// PATCH routes
+app.patch('/api/tasks/:id', async (req, res) => {
+  const { done, title } = req.body;
+  try {
+    if (done !== undefined) await db.execute({ sql: `UPDATE tasks SET done = ? WHERE id = ?`, args: [done ? 1 : 0, req.params.id] });
+    if (title !== undefined) await db.execute({ sql: `UPDATE tasks SET title = ? WHERE id = ?`, args: [title, req.params.id] });
+    res.json({ success: true });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.patch('/api/reminders/:id', async (req, res) => {
+  const { done, title } = req.body;
+  try {
+    if (done !== undefined) await db.execute({ sql: `UPDATE reminders SET done = ? WHERE id = ?`, args: [done ? 1 : 0, req.params.id] });
+    if (title !== undefined) await db.execute({ sql: `UPDATE reminders SET title = ? WHERE id = ?`, args: [title, req.params.id] });
+    res.json({ success: true });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.patch('/api/bills/:id', async (req, res) => {
+  const { paid } = req.body;
+  try {
+    await db.execute({ sql: `UPDATE bills SET paid = ? WHERE id = ?`, args: [paid ? 1 : 0, req.params.id] });
+    res.json({ success: true });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.patch('/api/watchlist/:id', async (req, res) => {
+  const { watched } = req.body;
+  try {
+    await db.execute({ sql: `UPDATE watchlist SET watched = ? WHERE id = ?`, args: [watched ? 1 : 0, req.params.id] });
+    res.json({ success: true });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.patch('/api/events/:id', async (req, res) => {
+  const { title, date, notes } = req.body;
+  try {
+    if (title) await db.execute({ sql: `UPDATE events SET title = ? WHERE id = ?`, args: [title, req.params.id] });
+    if (date) await db.execute({ sql: `UPDATE events SET date = ? WHERE id = ?`, args: [date, req.params.id] });
+    if (notes) await db.execute({ sql: `UPDATE events SET notes = ? WHERE id = ?`, args: [notes, req.params.id] });
+    res.json({ success: true });
+  } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+// Health check
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', uptime: Math.floor(process.uptime()), agent: 'Sia' });
+});
+
 // --- 2. SETUP TELEGRAM BOT & ENVIRONMENT ---
 initializeBot();
 const bot = getBot();
@@ -162,8 +211,7 @@ if (process.env.ENVIRONMENT === 'production') {
     // 🌍 SERVER MODE: Use Webhook
     const WEBHOOK_PATH = `/telegraf/${process.env.TELEGRAM_BOT_TOKEN}`;
     app.use(bot.webhookCallback(WEBHOOK_PATH));
-    
-    const DOMAIN = 'https://unsoiled-fifty-overcome.ngrok-free.dev'; 
+    const DOMAIN = process.env.SERVER_DOMAIN;
     bot.telegram.setWebhook(`${DOMAIN}${WEBHOOK_PATH}`);
     console.log(`[SYSTEM] 🔗 Webhook mapped to ${DOMAIN}${WEBHOOK_PATH}`);
 } else {

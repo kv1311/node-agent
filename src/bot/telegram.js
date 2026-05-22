@@ -1,6 +1,6 @@
 import { Telegraf } from 'telegraf';
 import 'dotenv/config';
-import { generateResponse } from '../ai/gemini.js';
+import { generateResponse } from '../ai/groq.js';
 
 let bot;
 
@@ -9,7 +9,7 @@ export function initializeBot() {
 
     bot.start((ctx) => {
         const firstName = ctx.from.first_name;
-        ctx.reply(`Initialization complete, ${firstName}. My Gemini brain is connected via Webhook.`);
+        ctx.reply(`Online, ${firstName}.`);
     });
 
     bot.on('text', async (ctx) => {
@@ -17,8 +17,7 @@ export function initializeBot() {
         const messageId = ctx.message.message_id.toString(); 
         
         ctx.sendChatAction('typing');
-        
-        const aiResponse = await generateResponse(userMessage, messageId);
+        const aiResponse = await generateResponse(userMessage, messageId, `telegram-${ctx.from.id}`);
         ctx.reply(aiResponse);
     });
 
