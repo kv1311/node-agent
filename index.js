@@ -11,106 +11,134 @@ import { getBot, initializeBot } from './src/bot/telegram.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
-
-import cors from 'cors'
+import cors from 'cors';
 app.use(cors({
   origin: [
-    'https://node-agent-ui.pages.dev/',  // your Cloudflare Pages URL
-    'http://localhost:3000',            // local dev
+    'https://node-agent-ui.pages.dev',   // NO trailing slash
+    'http://localhost:3000',
   ],
   methods: ['GET', 'POST', 'PATCH'],
   allowedHeaders: ['Content-Type'],
-}))
+}));
 
-// Boot the LibSQL Database
-initializeDatabase().catch(console.error);
-
-// --- 1. SETUP EXPRESS SERVER (THE DASHBOARD) ---
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
 
-app.get('/api/logs', async (req, res) => {
-    try {
-        const result = await db.execute('SELECT * FROM transactions ORDER BY date DESC LIMIT 50');
-        res.json({ success: true, data: result.rows });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
+// ---- GET routes for frontend ----
+app.get('/api/tasks', async (req, res) => {
+  try {
+    const result = await db.execute('SELECT * FROM tasks ORDER BY created_at DESC');
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-import { v4 as uuidv4 } from 'uuid'
-// npm install uuid  ← run this if not installed
+app.get('/api/reminders', async (req, res) => {
+  try {
+    const result = await db.execute('SELECT * FROM reminders ORDER BY remind_at DESC');
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
-// POST /api/tasks
-app.post('/api/tasks', (req, res) => {
-  const { title, due_date } = req.body
-  const id = uuidv4()
-  db.run(
-    'INSERT INTO tasks (id, title, due_date, done) VALUES (?, ?, ?, 0)',
-    [id, title, due_date || ''],
-    function(err) {
-      if (err) return res.status(500).json({ error: err.message })
-      res.json({ id, title, due_date: due_date || '', done: false })
-    }
-  )
-})
+app.get('/api/bills', async (req, res) => {
+  try {
+    const result = await db.execute('SELECT * FROM bills ORDER BY due_date DESC');
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
-// POST /api/reminders
-app.post('/api/reminders', (req, res) => {
-  const { title, remind_at } = req.body
-  const id = uuidv4()
-  db.run(
-    'INSERT INTO reminders (id, title, remind_at, done) VALUES (?, ?, ?, 0)',
-    [id, title, remind_at || ''],
-    function(err) {
-      if (err) return res.status(500).json({ error: err.message })
-      res.json({ id, title, remind_at: remind_at || '', done: false })
-    }
-  )
-})
+app.get('/api/events', async (req, res) => {
+  try {
+    const result = await db.execute('SELECT * FROM events ORDER BY date DESC');
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
-// POST /api/bills
-app.post('/api/bills', (req, res) => {
-  const { title, amount, due_date } = req.body
-  const id = uuidv4()
-  db.run(
-    'INSERT INTO bills (id, title, amount, due_date, paid) VALUES (?, ?, ?, ?, 0)',
-    [id, title, amount || 0, due_date || ''],
-    function(err) {
-      if (err) return res.status(500).json({ error: err.message })
-      res.json({ id, title, amount: amount || 0, due_date: due_date || '', paid: false })
-    }
-  )
-})
+app.get('/api/watchlist', async (req, res) => {
+  try {
+    const result = await db.execute('SELECT * FROM watchlist ORDER BY title ASC');
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
-// POST /api/events
-app.post('/api/events', (req, res) => {
-  const { title, date, notes } = req.body
-  const id = uuidv4()
-  db.run(
-    'INSERT INTO events (id, title, date, notes) VALUES (?, ?, ?, ?)',
-    [id, title, date || '', notes || ''],
-    function(err) {
-      if (err) return res.status(500).json({ error: err.message })
-      res.json({ id, title, date: date || '', notes: notes || '' })
-    }
-  )
-})
+// ---- POST routes using db.execute (correct for LibSQL) ----
+app.post('/api/tasks', async (req, res) => {
+  const { title, due_date } = req.body;
+  const id = uuidv4();
+  try {
+    await db.execute(
+      'INSERT INTO tasks (id, title, due_date, done) VALUES (?, ?, ?, 0)',
+      [id, title, due_date || '']
+    );
+    res.json({ id, title, due_date: due_date || '', done: false });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
-// POST /api/watchlist
-app.post('/api/watchlist', (req, res) => {
-  const { title, type, genre } = req.body
-  const id = uuidv4()
-  db.run(
-    'INSERT INTO watchlist (id, title, type, genre, watched) VALUES (?, ?, ?, ?, 0)',
-    [id, title, type || 'movie', genre || ''],
-    function(err) {
-      if (err) return res.status(500).json({ error: err.message })
-      res.json({ id, title, type: type || 'movie', genre: genre || '', watched: false })
-    }
-  )
-})
+app.post('/api/reminders', async (req, res) => {
+  const { title, remind_at } = req.body;
+  const id = uuidv4();
+  try {
+    await db.execute(
+      'INSERT INTO reminders (id, title, remind_at, done) VALUES (?, ?, ?, 0)',
+      [id, title, remind_at || '']
+    );
+    res.json({ id, title, remind_at: remind_at || '', done: false });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
+app.post('/api/bills', async (req, res) => {
+  const { title, amount, due_date } = req.body;
+  const id = uuidv4();
+  try {
+    await db.execute(
+      'INSERT INTO bills (id, title, amount, due_date, paid) VALUES (?, ?, ?, ?, 0)',
+      [id, title, amount || 0, due_date || '']
+    );
+    res.json({ id, title, amount: amount || 0, due_date: due_date || '', paid: false });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/events', async (req, res) => {
+  const { title, date, notes } = req.body;
+  const id = uuidv4();
+  try {
+    await db.execute(
+      'INSERT INTO events (id, title, date, notes) VALUES (?, ?, ?, ?)',
+      [id, title, date || '', notes || '']
+    );
+    res.json({ id, title, date: date || '', notes: notes || '' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/watchlist', async (req, res) => {
+  const { title, type, genre } = req.body;
+  const id = uuidv4();
+  try {
+    await db.execute(
+      'INSERT INTO watchlist (id, title, type, genre, watched) VALUES (?, ?, ?, ?, 0)',
+      [id, title, type || 'movie', genre || '']
+    );
+    res.json({ id, title, type: type || 'movie', genre: genre || '', watched: false });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // --- 2. SETUP TELEGRAM BOT & ENVIRONMENT ---
 initializeBot();
