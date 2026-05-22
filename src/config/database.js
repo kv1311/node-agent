@@ -51,15 +51,12 @@ export async function initializeDatabase() {
         CREATE UNIQUE INDEX IF NOT EXISTS unique_edge ON Edges(source_id, target_id, relation);
     
      `);
-    db.serialize(() => {
     db.run('CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, title TEXT NOT NULL, due_date TEXT DEFAULT \"\", done INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)');
     db.run('CREATE TABLE IF NOT EXISTS reminders (id TEXT PRIMARY KEY, title TEXT NOT NULL, remind_at TEXT DEFAULT \"\", done INTEGER DEFAULT 0)');
     db.run('CREATE TABLE IF NOT EXISTS bills (id TEXT PRIMARY KEY, title TEXT NOT NULL, amount REAL DEFAULT 0, due_date TEXT DEFAULT \"\", paid INTEGER DEFAULT 0)');
     db.run('CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, title TEXT NOT NULL, date TEXT DEFAULT \"\", notes TEXT DEFAULT \"\")');
     db.run('CREATE TABLE IF NOT EXISTS watchlist (id TEXT PRIMARY KEY, title TEXT NOT NULL, type TEXT DEFAULT \"movie\", genre TEXT DEFAULT \"\", watched INTEGER DEFAULT 0)');
     console.log('Tables created.');
-    });
-    db.close();
     console.log("[SYSTEM] 🧠 SQLite (LibSQL) Memory Graph & Master Schema Initialized.");
 }
 
