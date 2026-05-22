@@ -21,8 +21,13 @@ export async function ingestGoogleSheet({ spreadsheet_id }) {
         let totalInserted = 0;
         let processedTabs = [];
 
+        const SKIP_TABS = ['dashboard', 'summary', 'overview', 'memory'];
         // 2. Loop through every tab
         for (const tabName of tabs) {
+             if (SKIP_TABS.includes(tabName.toLowerCase())) {
+                console.log(`[SKIP] Ignoring tab: ${tabName}`);
+                continue;
+            }
             const response = await sheets.spreadsheets.values.get({
                 spreadsheetId: spreadsheet_id,
                 range: `${tabName}!A:E`, // Assuming standard A-E columns
@@ -92,11 +97,9 @@ export async function syncDashboardMemory({ spreadsheet_id, tab_name }) {
     }
 
     try {
-        console.log(`[SYNC] Starting Groq-powered dynamic extraction for tab: ${tab_name}`);
+        console.log(`[SYNC] Starting dynamic extraction for tab: ${tab_name}`);
 
-        // ==========================================
-        // STEP 1: Fetch raw rows from Sheets
-        // ==========================================
+        // STEP 1 — Fetch raw rows
         const sheets = google.sheets({ version: 'v4', auth });
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId: spreadsheet_id,
@@ -108,31 +111,27 @@ export async function syncDashboardMemory({ spreadsheet_id, tab_name }) {
             return { status: "Failed", error: "Tab is empty or could not be found." };
         }
 
-        // Convert rows to a pipe-separated plain text string (ignoring empty rows)
         const rawSheetData = rows
-            .filter(row => row.length > 0 && row.some(cell => cell.trim() !== ''))
+            .filter(row => row.length > 0 && row.some(cell => String(cell).trim() !== ''))
             .map(row => row.join(" | "))
             .join("\n");
 
-        // ==========================================
-        // STEP 2: Send raw text to Groq API (Llama 3 70B)
-        // ==========================================
-        const prompt = `
-You are a financial data extraction engine. Read the following raw, pipe-separated Google Sheets data.
-Extract every distinct financial entity you find (e.g., credit cards, loans, cash accounts, summary metrics).
+        console.log(`[SYNC] Raw data fetched, ${rows.length} rows`);
 
+        // STEP 2 — Ask Groq to extract nodes
+        const systemPrompt = `You are a financial data extraction engine.
 Rules:
-1. Infer the context from the headers and data structure. Do not assume hardcoded column names.
-2. Return ONLY a valid JSON object with a single key "nodes" that contains an array of objects. Do not include markdown or conversational text.
-3. Every object in the "nodes" array MUST have the following schema:
-   - "canonical_key": A snake_case unique identifier (format: category:subcategory:name, e.g., credit_card:hdfc:millennia).
-   - "label": A clear, human-readable summary of the entity.
-   - "type": Must be exactly one of: account | credit_card | loan | metric.
-   - "metadata": A JSON object containing all relevant fields inferred from the columns (e.g., limit, due, principal).
+1. Infer context from headers and data structure. Do not hardcode column names.
+2. Return ONLY a valid JSON object with a single key "nodes" containing an array.
+3. Every object in the array MUST have:
+   - "canonical_key": snake_case unique ID (format: category:subcategory:name)
+   - "label": clear human-readable name
+   - "type": exactly one of: account | credit_card | loan | metric
+   - "metadata": object with all relevant numeric/text fields from the data
+4. Ignore empty rows and header-only rows.
+5. No markdown, no backticks, no explanation. Raw JSON only.`;
 
-Raw Data:
-${rawSheetData}
-`;
+        const userPrompt = `Extract all financial entities from this raw Google Sheets dashboard data:\n\n${rawSheetData}`;
 
         const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
@@ -141,10 +140,13 @@ ${rawSheetData}
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                model: 'llama3-70b-8192', // Use the 70B model for strict JSON reasoning
-                messages: [{ role: 'system', content: prompt }],
-                response_format: { type: "json_object" }, // Forces Groq to output raw JSON
-                temperature: 0.1 // Low temperature for maximum deterministic accuracy
+                model: 'llama3-70b-8192',
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user',   content: userPrompt   }
+                ],
+                response_format: { type: "json_object" },
+                temperature: 0.1
             })
         });
 
@@ -155,57 +157,47 @@ ${rawSheetData}
 
         const groqData = await groqResponse.json();
         const jsonText = groqData.choices[0].message.content.trim();
+        console.log(`[SYNC] Groq responded, parsing JSON...`);
 
-        // ==========================================
-        // STEP 3: Upsert Extracted Nodes
-        // ==========================================
+        // STEP 3 — Parse + Upsert
         let extractedNodes;
         try {
-            // Because we asked for { "nodes": [...] }, we extract the array here
             const parsed = JSON.parse(jsonText);
             extractedNodes = parsed.nodes;
-        } catch (error) {
-            return { 
-                status: 'Failed', 
-                error: 'AI returned invalid JSON', 
-                raw: jsonText 
-            };
+        } catch (err) {
+            return { status: 'Failed', error: 'AI returned invalid JSON', raw: jsonText };
         }
 
-        if (!Array.isArray(extractedNodes)) {
-            return { status: 'Failed', error: 'AI did not return a valid nodes array.', raw: jsonText };
+        if (!Array.isArray(extractedNodes) || extractedNodes.length === 0) {
+            return { status: 'Failed', error: 'AI returned empty or invalid nodes array', raw: jsonText };
         }
 
         let syncedCount = 0;
-        let syncedKeys = [];
+        const syncedKeys = [];
 
         for (const node of extractedNodes) {
-            // Validation
             if (!node.canonical_key || !node.type || !node.metadata) {
-                console.warn("[WARNING] Skipping malformed node from AI:", node);
+                console.warn("[WARNING] Skipping malformed node:", node);
                 continue;
             }
 
-            // Upsert to SQLite Memory Graph
             await upsertMemoryNode({
                 canonical_key: node.canonical_key,
-                label: node.label || `Entity: ${node.canonical_key}`,
+                label: node.label || node.canonical_key,
                 type: node.type,
                 metadata: node.metadata
             });
 
             syncedCount++;
             syncedKeys.push(node.canonical_key);
+            console.log(`[SYNC] Upserted: ${node.canonical_key}`);
         }
 
-        return { 
-            status: 'Success', 
-            nodes_synced: syncedCount, 
-            keys: syncedKeys 
-        };
+        console.log(`[SYNC] Done. ${syncedCount} nodes synced.`);
+        return { status: 'Success', nodes_synced: syncedCount, keys: syncedKeys };
 
     } catch (error) {
-        console.error("Dashboard Sync Error:", error);
+        console.error("[SYNC] Dashboard Sync Error:", error);
         return { status: "Failed", error: error.message };
     }
 }

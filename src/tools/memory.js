@@ -111,3 +111,72 @@ export async function upsertEdge(sourceId, targetId, relation, weight = 1.0) {
         return { status: "Failed", error: error.message };
     }
 }
+
+export async function loadFinancialContext() {
+    const nodes = await db.execute({
+        sql: `SELECT canonical_key, label, type, metadata 
+              FROM Nodes 
+              WHERE is_active = 1 
+              ORDER BY type, canonical_key`,
+        args: []
+    });
+
+    if (!nodes.rows || nodes.rows.length === 0) return "";
+
+    // Group by type for clean formatting
+    const grouped = {
+        metric: [],
+        account: [],
+        credit_card: [],
+        loan: []
+    };
+
+    for (const node of nodes.rows) {
+        const meta = JSON.parse(node.metadata || '{}');
+        const type = node.type || 'metric';
+        if (!grouped[type]) grouped[type] = [];
+        grouped[type].push({ key: node.canonical_key, label: node.label, ...meta });
+    }
+
+    let context = "=== YOUR LIVE FINANCIAL PROFILE ===\n\n";
+
+    if (grouped.metric.length) {
+        context += "SUMMARY METRICS:\n";
+        grouped.metric.forEach(n => {
+            context += `  • ${n.label}: ${n.value ?? JSON.stringify(n)}\n`;
+        });
+        context += "\n";
+    }
+
+    if (grouped.account.length) {
+        context += "CASH ACCOUNTS:\n";
+        grouped.account.forEach(n => {
+            context += `  • ${n.label}: ₹${n.balance ?? n.value ?? '?'}\n`;
+        });
+        context += "\n";
+    }
+
+    if (grouped.credit_card.length) {
+        context += "CREDIT CARDS:\n";
+        grouped.credit_card.forEach(n => {
+            context += `  • ${n.label}:\n`;
+            context += `      Limit: ₹${n.limit ?? '?'}\n`;
+            context += `      Used/Due: ₹${n.due ?? n.current_due ?? '?'}\n`;
+            context += `      Available: ₹${n.available ?? '?'}\n`;
+        });
+        context += "\n";
+    }
+
+    if (grouped.loan.length) {
+        context += "LOANS:\n";
+        grouped.loan.forEach(n => {
+            context += `  • ${n.label} (${n.direction ?? '?'}):\n`;
+            context += `      Principal: ₹${n.principal ?? '?'}\n`;
+            context += `      Remaining: ₹${n.remaining ?? '?'}\n`;
+            context += `      Repayment: ${n.repayment ?? n.repayment_terms ?? '?'}\n`;
+        });
+    }
+
+    context += "\n=== END FINANCIAL PROFILE ===";
+    return context;
+}

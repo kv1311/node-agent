@@ -1,15 +1,14 @@
 import Groq from "groq-sdk";
 import 'dotenv/config';
 import { logTransaction, editTransaction } from '../tools/finance.js';
-import { upsertMemoryNode, fetchMemories, findConflictingNodes, getMemoryHistory } from '../tools/memory.js';
-
+import { upsertMemoryNode, fetchMemories, findConflictingNodes, getMemoryHistory, loadFinancialContext } from '../tools/memory.js';
 import { analyzeFinances, getRecentTransactions } from '../tools/analyze.js';
-import { ingestGoogleSheet } from '../tools/workspace.js';
+import { ingestGoogleSheet,syncDashboardMemory} from '../tools/workspace.js';
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 const conversationHistory = [];
-const MAX_HISTORY = 10; // Keeps the last 5 turns (user + assistant)
+const MAX_HISTORY = 10; 
 
 const tools = [
     {
@@ -139,28 +138,24 @@ const tools = [
 
 export async function generateResponse(prompt, messageId) {
     try {
-        const activeMemories = await fetchMemories();
-        const memoryContext = activeMemories.join(' | ');
-        const today = new Date();
-        const todayISO = today.toISOString().split('T')[0];
+        const today = new Date().toISOString().split('T')[0];
+        const liveContext = await loadFinancialContext(); // ← Only this needed
 
-        // 2. INJECT HISTORY INTO THE MESSAGES
         const messages = [
-            { 
-                role: "system", 
-                content: `You are the personal assistant for Kamalavasanthan. 
-                Today's date is: ${todayISO}. 
-                
-                LONG TERM MEMORY FACTS: [ ${memoryContext} ]
-                
-                CRITICAL RULES:
-                1. CALL ONLY ONE TOOL AT A TIME. 
-                2. THE CONFIRMATION LOOP: Draft new transactions and ask for confirmation first. ONLY execute 'logTransaction' AFTER the user says yes.
-                3. If the user wants to correct a past mistake, use editTransaction.
-                4. NEVER output raw <function=...> tags in your text.
-                5. THE MEMORY WORKFLOW: When saving a new fact, use 'findConflictingNodes' first, then 'upsert_memory_node'.
-                6. GOOGLE SHEETS: You have secure backend access to Google Workspace. If the user provides a Google Sheets URL and asks to migrate or read it, DO NOT say you lack access. Extract the Spreadsheet ID from the URL and immediately call the 'ingestGoogleSheet' tool.`
-                   
+            {
+                role: "system",
+                content: `You are a personal finance AI assistant.
+Today's date is ${today}.
+
+${liveContext}
+
+RULES:
+1. Call only ONE tool at a time.
+2. CONFIRMATION LOOP: For new transactions, draft a summary and wait for user to say "yes" or "confirm". Only THEN call logTransaction.
+3. To fix past mistakes, use editTransaction.
+4. If financial data seems outdated, suggest the user runs "sync dashboard".
+5. Amounts are in INR (₹).
+6. Never output raw function tags in your replies.`
             },
             ...conversationHistory,
             { role: "user", content: prompt }
@@ -168,29 +163,34 @@ export async function generateResponse(prompt, messageId) {
 
         const response = await groq.chat.completions.create({
             model: "llama-3.3-70b-versatile",
-            messages: messages,
-            tools: tools,
+            messages,
+            tools,
             tool_choice: "auto"
         });
 
         const responseMessage = response.choices[0].message;
 
         if (responseMessage.tool_calls) {
-            // ... exact same tool execution loop ...
             messages.push(responseMessage);
 
             for (const toolCall of responseMessage.tool_calls) {
                 const args = JSON.parse(toolCall.function.arguments);
                 let apiResponse;
-                
-                if (toolCall.function.name === "logTransaction") apiResponse = await logTransaction(args, messageId);
-                else if (toolCall.function.name === "analyzeFinances") apiResponse = await analyzeFinances(args);
-                else if (toolCall.function.name === "editTransaction") apiResponse = await editTransaction(args);
-                else if (toolCall.function.name === "upsert_memory_node") apiResponse = await upsertMemoryNode(args);
-                else if (toolCall.function.name === "findConflictingNodes") apiResponse = await findConflictingNodes(args);
-                else if (toolCall.function.name === "getMemoryHistory") apiResponse = await getMemoryHistory(args);
-                else if (toolCall.function.name === "ingestGoogleSheet") apiResponse = await ingestGoogleSheet(args);
-                else if (toolCall.function.name === "getRecentTransactions") apiResponse = await getRecentTransactions(args);
+
+                switch (toolCall.function.name) {
+                    case "logTransaction":        apiResponse = await logTransaction(args, messageId); break;
+                    case "analyzeFinances":       apiResponse = await analyzeFinances(args);           break;
+                    case "editTransaction":       apiResponse = await editTransaction(args);           break;
+                    case "upsert_memory_node":    apiResponse = await upsertMemoryNode(args);          break;
+                    case "findConflictingNodes":  apiResponse = await findConflictingNodes(args);      break;
+                    case "getMemoryHistory":      apiResponse = await getMemoryHistory(args);          break;
+                    case "ingestGoogleSheet":     apiResponse = await ingestGoogleSheet(args);         break;
+                    case "getRecentTransactions": apiResponse = await getRecentTransactions(args);     break;
+                    case "syncDashboardMemory":   apiResponse = await syncDashboardMemory(args);       break; // ← was missing
+                    default:
+                        apiResponse = { error: `Unknown tool: ${toolCall.function.name}` };
+                }
+
                 messages.push({
                     tool_call_id: toolCall.id,
                     role: "tool",
@@ -201,25 +201,30 @@ export async function generateResponse(prompt, messageId) {
 
             const finalResponse = await groq.chat.completions.create({
                 model: "llama-3.3-70b-versatile",
-                messages: messages
+                messages
             });
 
-            // 3. SAVE THE INTERACTION TO HISTORY
-            conversationHistory.push({ role: "user", content: prompt });
-            conversationHistory.push({ role: "assistant", content: finalResponse.choices[0].message.content });
-            if (conversationHistory.length > MAX_HISTORY) conversationHistory.splice(0, 2);
-
-            return finalResponse.choices[0].message.content || "✅ Task completed.";
+            const assistantReply = finalResponse.choices[0].message.content || "✅ Done.";
+            _saveToHistory(prompt, assistantReply);
+            return assistantReply;
         }
 
-        // 3. SAVE THE INTERACTION TO HISTORY (If no tools were used)
-        conversationHistory.push({ role: "user", content: prompt });
-        conversationHistory.push({ role: "assistant", content: responseMessage.content });
-        if (conversationHistory.length > MAX_HISTORY) conversationHistory.splice(0, 2);
+        // No tools used
+        const assistantReply = responseMessage.content || "I couldn't process that.";
+        _saveToHistory(prompt, assistantReply);
+        return assistantReply;
 
-        return responseMessage.content || "I couldn't process that.";
     } catch (error) {
         console.error("API Error:", error.message);
-        return "Sorry, my brain encountered an error.";
+        return "Sorry, I encountered an error. Please try again.";
+    }
+}
+
+// ─── Helper to keep history clean ────────────────────────────────────────────
+function _saveToHistory(userPrompt, assistantReply) {
+    conversationHistory.push({ role: "user",      content: userPrompt     });
+    conversationHistory.push({ role: "assistant", content: assistantReply });
+    if (conversationHistory.length > MAX_HISTORY) {
+        conversationHistory.splice(0, 2); // Drop oldest pair
     }
 }
