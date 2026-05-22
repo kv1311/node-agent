@@ -4,6 +4,8 @@ const db = createClient({
     url: 'file:agent.db',
 });
 
+
+
 export async function initializeDatabase() {
     await db.executeMultiple(`
         CREATE TABLE IF NOT EXISTS transactions (
@@ -88,6 +90,7 @@ export async function initializeDatabase() {
             genre TEXT DEFAULT '',
             watched INTEGER DEFAULT 0
         );
+
         CREATE TABLE IF NOT EXISTS conversations (
             id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,

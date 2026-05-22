@@ -11,6 +11,7 @@ import { generateResponse } from './src/ai/groq.js';
 
 import { v4 as uuidv4 } from 'uuid';
 
+initializeDatabase().catch(console.error);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
