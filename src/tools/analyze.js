@@ -59,3 +59,25 @@ export async function analyzeFinances({ time_frame }) {
         return { status: "Failed", error: error.message };
     }
 }
+export async function getRecentTransactions({ limit = 10 }) {
+    try {
+        const query = await db.execute({
+            sql: `SELECT date, description, amount, category, account_source FROM transactions ORDER BY date DESC LIMIT ?`,
+            args: [limit]
+        });
+        
+        if (query.rows.length === 0) return { status: "Success", data: "No transactions found." };
+        
+        let result = `Last ${limit} Transactions:\n`;
+        query.rows.forEach(row => {
+            // Format: YYYY-MM-DD: Description (₹Amount) [Category]
+            const cleanDate = row.date.split('T')[0];
+            result += `- ${cleanDate}: ${row.description} (₹${row.amount}) [${row.category}]\n`;
+        });
+        
+        return { status: "Success", data: result };
+    } catch (error) {
+        console.error("Fetch Recent Error:", error);
+        return { status: "Failed", error: error.message };
+    }
+}

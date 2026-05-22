@@ -1,9 +1,9 @@
 import Groq from "groq-sdk";
 import 'dotenv/config';
 import { logTransaction, editTransaction } from '../tools/finance.js';
-import { analyzeFinances } from '../tools/analyze.js';
 import { upsertMemoryNode, fetchMemories, findConflictingNodes, getMemoryHistory } from '../tools/memory.js';
 
+import { analyzeFinances, getRecentTransactions } from '../tools/analyze.js';
 import { ingestGoogleSheet } from '../tools/workspace.js';
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -76,6 +76,19 @@ const tools = [
                     time_frame: { type: "string", enum: ["current_month", "last_month", "all"] }
                 },
                 required: ["time_frame"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "getRecentTransactions",
+            description: "Fetches a list of the most recent individual transactions from the database.",
+            parameters: {
+                type: "object",
+                properties: {
+                    limit: { type: "integer", description: "How many transactions to retrieve (default 10)." }
+                }
             }
         }
     },
@@ -177,7 +190,7 @@ export async function generateResponse(prompt, messageId) {
                 else if (toolCall.function.name === "findConflictingNodes") apiResponse = await findConflictingNodes(args);
                 else if (toolCall.function.name === "getMemoryHistory") apiResponse = await getMemoryHistory(args);
                 else if (toolCall.function.name === "ingestGoogleSheet") apiResponse = await ingestGoogleSheet(args);
-
+                else if (toolCall.function.name === "getRecentTransactions") apiResponse = await getRecentTransactions(args);
                 messages.push({
                     tool_call_id: toolCall.id,
                     role: "tool",
