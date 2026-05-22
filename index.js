@@ -7,6 +7,8 @@ import { initializeDatabase } from './src/config/database.js';
 import db from './src/config/database.js';
 import { getBot, initializeBot } from './src/bot/telegram.js';
 
+import { generateResponse } from './src/ai/gemini.js';
+
 import { v4 as uuidv4 } from 'uuid';
 
 
@@ -29,6 +31,17 @@ app.get('/api/tasks', async (req, res) => {
   try {
     const result = await db.execute('SELECT * FROM tasks ORDER BY created_at DESC');
     res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+
+app.post('/api/chat', async (req, res) => {
+  const { message } = req.body;
+  try {
+    const reply = await generateResponse(message, null);
+    res.json({ reply });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
