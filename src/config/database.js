@@ -5,6 +5,7 @@ const db = createClient({
 });
 
 export async function initializeDatabase() {
+    export async function initializeDatabase() {
     await db.executeMultiple(`
         CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -20,7 +21,7 @@ export async function initializeDatabase() {
         );
 
         CREATE TABLE IF NOT EXISTS monthly_rollups (
-            month TEXT PRIMARY KEY, 
+            month TEXT PRIMARY KEY,
             total_inflow REAL DEFAULT 0,
             total_outflow REAL DEFAULT 0,
             uncle_investment_total REAL DEFAULT 0,
@@ -28,35 +29,72 @@ export async function initializeDatabase() {
         );
 
         CREATE TABLE IF NOT EXISTS Nodes (
-                id TEXT PRIMARY KEY,
-                label TEXT,
-                type TEXT,
-                metadata TEXT,
-                canonical_key TEXT,
-                is_active INTEGER DEFAULT 1,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
+            id TEXT PRIMARY KEY,
+            label TEXT,
+            type TEXT,
+            metadata TEXT,
+            canonical_key TEXT,
+            is_active INTEGER DEFAULT 1,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
 
         CREATE TABLE IF NOT EXISTS Edges (
-                id TEXT PRIMARY KEY,
-                source_id TEXT,
-                target_id TEXT,
-                relation TEXT,
-                weight REAL DEFAULT 1.0,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(source_id) REFERENCES Nodes(id),
-                FOREIGN KEY(target_id) REFERENCES Nodes(id)
-            );
+            id TEXT PRIMARY KEY,
+            source_id TEXT,
+            target_id TEXT,
+            relation TEXT,
+            weight REAL DEFAULT 1.0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(source_id) REFERENCES Nodes(id),
+            FOREIGN KEY(target_id) REFERENCES Nodes(id)
+        );
 
-        CREATE UNIQUE INDEX IF NOT EXISTS unique_edge ON Edges(source_id, target_id, relation);
-    
-     `);
-    db.run('CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, title TEXT NOT NULL, due_date TEXT DEFAULT \"\", done INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)');
-    db.run('CREATE TABLE IF NOT EXISTS reminders (id TEXT PRIMARY KEY, title TEXT NOT NULL, remind_at TEXT DEFAULT \"\", done INTEGER DEFAULT 0)');
-    db.run('CREATE TABLE IF NOT EXISTS bills (id TEXT PRIMARY KEY, title TEXT NOT NULL, amount REAL DEFAULT 0, due_date TEXT DEFAULT \"\", paid INTEGER DEFAULT 0)');
-    db.run('CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, title TEXT NOT NULL, date TEXT DEFAULT \"\", notes TEXT DEFAULT \"\")');
-    db.run('CREATE TABLE IF NOT EXISTS watchlist (id TEXT PRIMARY KEY, title TEXT NOT NULL, type TEXT DEFAULT \"movie\", genre TEXT DEFAULT \"\", watched INTEGER DEFAULT 0)');
+        CREATE UNIQUE INDEX IF NOT EXISTS unique_edge
+        ON Edges(source_id, target_id, relation);
+
+        CREATE TABLE IF NOT EXISTS tasks (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            due_date TEXT DEFAULT '',
+            done INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS reminders (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            remind_at TEXT DEFAULT '',
+            done INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS bills (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            amount REAL DEFAULT 0,
+            due_date TEXT DEFAULT '',
+            paid INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS events (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            date TEXT DEFAULT '',
+            notes TEXT DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS watchlist (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            type TEXT DEFAULT 'movie',
+            genre TEXT DEFAULT '',
+            watched INTEGER DEFAULT 0
+        );
+    `);
+
     console.log('Tables created.');
+    console.log('[SYSTEM] 🧠 SQLite (LibSQL) Memory Graph & Master Schema Initialized.');
+}
+
     console.log("[SYSTEM] 🧠 SQLite (LibSQL) Memory Graph & Master Schema Initialized.");
 }
 
