@@ -5,7 +5,6 @@ const db = createClient({
 });
 
 export async function initializeDatabase() {
-    export async function initializeDatabase() {
     await db.executeMultiple(`
         CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,10 +89,6 @@ export async function initializeDatabase() {
             watched INTEGER DEFAULT 0
         );
     `);
-
-    console.log('Tables created.');
-    console.log('[SYSTEM] 🧠 SQLite (LibSQL) Memory Graph & Master Schema Initialized.');
-}
 
     console.log("[SYSTEM] 🧠 SQLite (LibSQL) Memory Graph & Master Schema Initialized.");
 }
