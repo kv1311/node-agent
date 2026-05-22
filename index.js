@@ -12,7 +12,7 @@ import { getBot, initializeBot } from './src/bot/telegram.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
-const cors = require('cors')
+import cors from 'cors'
 app.use(cors({
   origin: [
     'https://node-agent-ui.pages.dev/',  // your Cloudflare Pages URL
