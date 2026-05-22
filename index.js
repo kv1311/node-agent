@@ -13,7 +13,14 @@ import { v4 as uuidv4 } from 'uuid';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 import cors from 'cors';
-app.use(cors());
+app.use(cors({
+  origin: [
+    'https://node-agent-ui.pages.dev',   // NO trailing slash
+    'http://localhost:3000',
+  ],
+  methods: ['GET', 'POST', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'ngrok-skip-browser-warning'],
+}));
 
 app.use(express.json());
 
