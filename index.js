@@ -7,6 +7,7 @@ import { initializeDatabase } from './src/config/database.js';
 import db from './src/config/database.js';
 import { getBot, initializeBot } from './src/bot/telegram.js';
 
+import { v4 as uuidv4 } from 'uuid';
 
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
