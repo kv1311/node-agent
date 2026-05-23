@@ -4,13 +4,11 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// Write to file + console
 const logDir = path.join(__dirname, '../../logs');
 if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
 
 const logStream = fs.createWriteStream(
-  path.join(logDir, 'access.log'), 
+  path.join(logDir, 'access.log'),
   { flags: 'a' }
 );
 
@@ -19,4 +17,6 @@ export const requestLogger = morgan(
   { stream: logStream }
 );
 
-export const consoleLogger = morgan('dev');
+export const consoleLogger = morgan(
+  '\x1b[36m[:date[iso]]\x1b[0m :method :url \x1b[33m:status\x1b[0m :response-time ms',
+);

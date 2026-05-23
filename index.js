@@ -49,10 +49,6 @@ app.use('/api', memoryRoutes);
 app.use('/api', adminRoutes);
 app.use('/api', journalRoutes);
 
-// Telegram
-initializeBot();
-const bot = getBot();
-
 if (process.env.ENVIRONMENT === 'production') {
   startMorningBriefing(bot);
   const WEBHOOK_PATH = `/telegraf/${process.env.TELEGRAM_BOT_TOKEN}`;
@@ -68,9 +64,26 @@ const PORT = process.env.PORT || 3000;
 
 async function start() {
   await initializeDatabase();
+  
   app.listen(PORT, () => {
-    console.log(`\n[SIA] Running on http://localhost:${PORT}`);
+    console.log(`[SIA] Running on http://localhost:${PORT}`);
   });
+
+  // Telegram
+  initializeBot();
+  const bot = getBot();
+
+  if (process.env.ENVIRONMENT === 'production') {
+    const WEBHOOK_PATH = `/telegraf/${process.env.TELEGRAM_BOT_TOKEN}`;
+    app.use(bot.webhookCallback(WEBHOOK_PATH));
+    await bot.telegram.setWebhook(`${process.env.SERVER_DOMAIN}${WEBHOOK_PATH}`);
+    console.log(`[SYSTEM] Webhook → ${process.env.SERVER_DOMAIN}${WEBHOOK_PATH}`);
+    startMorningBriefing(bot); // ← after everything is ready
+  } else {
+    bot.launch();
+    console.log(`[SYSTEM] Polling started.`);
+    startMorningBriefing(bot); // ← works in dev too for testing
+  }
 }
 
 start();

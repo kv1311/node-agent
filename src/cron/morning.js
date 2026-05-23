@@ -1,6 +1,8 @@
 import cron from 'node-cron';
 import db from '../config/database.js';
 
+import { log } from '../utils/log.js';
+
 export function startMorningBriefing(bot) {
   // Every day at 8:00 AM IST (UTC+5:30 = 02:30 UTC)
   cron.schedule('30 2 * * *', async () => {
@@ -60,15 +62,15 @@ export function startMorningBriefing(bot) {
       const chatId = process.env.TELEGRAM_CHAT_ID;
 
       if (!chatId) {
-        console.error('[CRON] TELEGRAM_CHAT_ID not set in .env');
+        log.cron('TELEGRAM_CHAT_ID not set in .env — briefing skipped');
         return;
       }
 
       await bot.telegram.sendMessage(chatId, message);
-      console.log('[CRON] Morning briefing sent.');
+      log.cron('Morning briefing sent successfully');
 
     } catch (error) {
-      console.error('[CRON] Morning briefing failed:', error.message);
+      log.cron('Morning briefing failed', error.message);
     }
   }, {
     timezone: "Asia/Kolkata"

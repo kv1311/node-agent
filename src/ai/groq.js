@@ -8,6 +8,7 @@ import { analyzeFinances, getRecentTransactions } from '../tools/analyze.js';
 import { syncDashboardMemory } from '../tools/workspace.js';
 import db from '../config/database.js';
 import { webSearch } from '../tools/search.js';
+import { log } from '../utils/log.js';
 
 import { manageJournal } from '../tools/journal.js';
 
@@ -350,6 +351,7 @@ async function saveHistory(sessionId, role, content) {
 
 async function executeTool(name, args, messageId) {
   try {
+    log.tool(`${name} called`, args);
     switch (name) {
       // Memory
       case "upsert_memory_node":    return await upsertMemoryNode(args);
@@ -383,7 +385,7 @@ async function executeTool(name, args, messageId) {
         return { status: "Failed", error: `Unknown tool: ${name}` };
     }
   } catch (error) {
-    console.error(`[TOOL ERROR] ${name}:`, error.message);
+    log.tool(`[TOOL ERROR] ${name}:`, error.message);
     return { status: "Failed", tool: name, error: error.message, recoverable: true };
   }
 }
@@ -458,7 +460,7 @@ export async function generateResponse(prompt, messageId, sessionId = 'telegram-
     return reply;
 
   } catch (error) {
-    console.error("[AGENT ERROR]", error.message);
+    log.agent("[AGENT ERROR]", error.message);
     return "Something went wrong on my end. Try again.";
   }
 }
