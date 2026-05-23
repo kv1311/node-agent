@@ -446,33 +446,56 @@ async function callGroq(messages, tools = null) {
     params.tools = tools
     params.tool_choice = 'auto'
   }
-  return await groq.chat.completions.create(params)
+
+  try {
+    return await groq.chat.completions.create(params)
+  } catch (error) {
+    throw error
+  }
 }
 
 // ── Gemini fallback (conversational only — no tools) ─────────────────────────
 
 async function callGemini(messages, systemPrompt) {
   log.warn('Groq unavailable — falling back to Gemini')
-  const model = gemini.getGenerativeModel({ model: 'gemini-1.5-flash' })
-
-  // Convert OpenAI-style messages to Gemini format
-  const history = messages
-    .filter(m => m.role !== 'system')
-    .slice(0, -1) // all but last
-    .map(m => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }],
-    }))
-
-  const lastMessage = messages[messages.length - 1]
-
-  const chat = model.startChat({
-    history,
+  const model = gemini.getGenerativeModel({
+    model: 'gemini-3.1-flash-lite',
     systemInstruction: systemPrompt,
   })
 
-  const result = await chat.sendMessage(lastMessage.content)
-  return result.response.text()
+  // Filter to only user/assistant messages (drop system + tool messages)
+  // Then ensure history alternates correctly starting with user
+  const conversational = messages
+    .filter(m => m.role === 'user' || m.role === 'assistant')
+    .filter(m => typeof m.content === 'string' && m.content.trim().length > 0)
+
+  // Gemini requires history to start with 'user' role
+  // Drop leading assistant messages if any
+  while (conversational.length > 0 && conversational[0].role === 'assistant') {
+    conversational.shift()
+  }
+
+  // Last message is what we send — history is everything before it
+  const lastMessage = conversational[conversational.length - 1]
+  const priorMessages = conversational.slice(0, -1)
+
+  // Build Gemini-format history (user → model alternating)
+  const geminiHistory = priorMessages.map(m => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }],
+  }))
+
+  try {
+    const chat = model.startChat({ history: geminiHistory })
+    const result = await chat.sendMessage(lastMessage?.content ?? '')
+    return result.response.text()
+  } catch (err) {
+    // If history still causes issues, try with no history at all
+    log.warn('Gemini with history failed, retrying bare')
+    const chat = model.startChat({ history: [] })
+    const result = await chat.sendMessage(lastMessage?.content ?? '')
+    return result.response.text()
+  }
 }
 
 // ── Main entry point ──────────────────────────────────────────────────────────
