@@ -12,24 +12,37 @@ import { log } from '../utils/log.js';
 
 import { manageJournal } from '../tools/journal.js';
 
+const contextCache = new Map()
+
+async function getCachedContext(prompt) {
+  const cacheKey = 'context'
+  const cached = contextCache.get(cacheKey)
+  if (cached && Date.now() - cached.time < 60_000) {
+    return cached.value
+  }
+  const value = await loadContext(prompt)
+  contextCache.set(cacheKey, { value, time: Date.now() })
+  return value
+}
+
+
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // ── Tool definitions ────────────────────────────────────────────────────────
 
 const tools = [
-  // MEMORY
   {
     type: "function",
     function: {
       name: "upsert_memory_node",
-      description: "Save or update any fact about the user — financial, personal, preference, habit, relationship. Use a strict canonical_key. Automatically replaces outdated facts while preserving history.",
+      description: "Save or update a fact. Always call find_conflicting_nodes first.",
       parameters: {
         type: "object",
         properties: {
-          canonical_key: { type: "string", description: "Format: category:subcategory:item. E.g. finance:hdfc:credit_limit, personal:health:medication, preference:food:diet" },
-          label: { type: "string", description: "Human-readable fact. E.g. 'HDFC credit limit is ₹1.5L'" },
-          type: { type: "string", description: "One of: finance, personal, preference, habit, relationship, goal" },
-          metadata: { type: "object", description: "All relevant structured data for this fact." }
+          canonical_key: { type: "string" },
+          label: { type: "string" },
+          type: { type: "string", enum: ["finance", "personal", "preference", "habit", "relationship", "goal"] },
+          metadata: { type: "object" }
         },
         required: ["canonical_key", "label", "type"]
       }
@@ -39,7 +52,7 @@ const tools = [
     type: "function",
     function: {
       name: "find_conflicting_nodes",
-      description: "Check if a similar memory already exists before saving, to avoid duplicates.",
+      description: "Check for duplicate memory before saving.",
       parameters: {
         type: "object",
         properties: {
@@ -54,32 +67,28 @@ const tools = [
     type: "function",
     function: {
       name: "get_memory_history",
-      description: "Get the full audit trail of a specific memory key.",
+      description: "Get audit trail of a memory key.",
       parameters: {
         type: "object",
-        properties: {
-          canonical_key: { type: "string" }
-        },
+        properties: { canonical_key: { type: "string" } },
         required: ["canonical_key"]
       }
     }
   },
-
-  // FINANCE
   {
     type: "function",
     function: {
       name: "log_transaction",
-      description: "Log a new financial transaction after user confirms.",
+      description: "Log a confirmed financial transaction.",
       parameters: {
         type: "object",
         properties: {
           amount: { type: "number" },
           type: { type: "string", enum: ["inflow", "outflow"] },
-          category: { type: "string", description: "Food, Transport, Utilities, Investments, Health, Entertainment, etc." },
+          category: { type: "string" },
           description: { type: "string" },
-          account_source: { type: "string", description: "e.g. HDFC, Zerodha, Cash. Default: unknown." },
-          date: { type: "string", description: "YYYY-MM-DD. Calculate from relative dates like 'yesterday'." }
+          account_source: { type: "string" },
+          date: { type: "string", description: "YYYY-MM-DD" }
         },
         required: ["amount", "type", "category", "description"]
       }
@@ -89,7 +98,7 @@ const tools = [
     type: "function",
     function: {
       name: "edit_transaction",
-      description: "Modify an existing transaction. Use when user says change, fix, update a past log.",
+      description: "Fix an existing transaction.",
       parameters: {
         type: "object",
         properties: {
@@ -105,7 +114,7 @@ const tools = [
     type: "function",
     function: {
       name: "analyze_finances",
-      description: "Query the database to answer spending questions.",
+      description: "Query spending data.",
       parameters: {
         type: "object",
         properties: {
@@ -119,80 +128,52 @@ const tools = [
     type: "function",
     function: {
       name: "get_recent_transactions",
-      description: "Fetch recent individual transactions.",
+      description: "Fetch recent transactions.",
       parameters: {
         type: "object",
-        properties: {
-          limit: { type: "integer" }
-        }
+        properties: { limit: { type: "integer" } }
       }
     }
   },
-{
-  type: "function",
-  function: {
-    name: "manage_journal",
-    description: "Write, read, list, or search journal entries. You MUST always include the 'action' field. Use action='write' when user says 'journal this', 'log this', 'save this'. Use action='list' when user asks to see past entries. Use action='read' to get a specific entry. Use action='search' to find entries by keyword. NEVER call this tool without specifying action.",
-    parameters: {
-      type: "object",
-      properties: {
-        action: { type: "string", enum: ["write", "list", "read", "search", "delete"] },
-        title: { type: "string", description: "Optional. A short evocative title for the entry, not a summary. Something poetic or specific." },
-        content: { type: "string", description: "The full journal entry. Preserve the user's fragments and voice. Add connective tissue. End with one quiet observation Sia noticed that the user didn't say explicitly." },
-        mood: { type: "string", description: "One word or short phrase. E.g. restless, clear, heavy, scattered, light." },
-        tags: { type: "array", items: { type: "string" }, description: "2-4 tags. E.g. ['travel', 'people', 'beach']" },
-        session_id: { type: "string", description: "Pass the current session_id so the entry is linked to the conversation." },
-        keyword: { type: "string", description: "Search term for read/search/delete actions." },
-        limit: { type: "integer", description: "Number of entries to return for list/search." }
-      },
-      required: ["action"]
-    }
-  }
-},
-  // TASKS
   {
     type: "function",
     function: {
       name: "manage_task",
-      description: "Create, complete, or query tasks. Use action field to specify what to do.",
-      parameters: {
-        type: "object",
-        properties: {
-          action: { type: "string", enum: ["create", "complete", "delete", "list"] },
-          title: { type: "string", description: "Required for create." },
-          due_date: { type: "string", description: "YYYY-MM-DD. Optional for create." },
-          keyword: { type: "string", description: "Search keyword for complete/delete." }
-        },
-        required: ["action"]
-      }
-    }
-  },
-
-  // REMINDERS
-  {
-    type: "function",
-    function: {
-      name: "manage_reminder",
-      description: "Create, complete, or list reminders.",
+      description: "Create, complete, delete, or list tasks.",
       parameters: {
         type: "object",
         properties: {
           action: { type: "string", enum: ["create", "complete", "delete", "list"] },
           title: { type: "string" },
-          remind_at: { type: "string", description: "ISO datetime or natural description." },
+          due_date: { type: "string" },
           keyword: { type: "string" }
         },
         required: ["action"]
       }
     }
   },
-
-  // BILLS
+  {
+    type: "function",
+    function: {
+      name: "manage_reminder",
+      description: "Create, complete, delete, or list reminders.",
+      parameters: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["create", "complete", "delete", "list"] },
+          title: { type: "string" },
+          remind_at: { type: "string" },
+          keyword: { type: "string" }
+        },
+        required: ["action"]
+      }
+    }
+  },
   {
     type: "function",
     function: {
       name: "manage_bill",
-      description: "Create, mark paid, or list bills.",
+      description: "Create, mark paid, delete, or list bills.",
       parameters: {
         type: "object",
         properties: {
@@ -206,28 +187,11 @@ const tools = [
       }
     }
   },
-  { // Searching
-    type: "function",
-    function: {
-      name: "web_search",
-      description: "Search the web for current information. Use when asked about news, prices, ratings, facts you don't know, or anything that requires up-to-date data.",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "The search query." },
-          count: { type: "integer", description: "Number of results. Default 5." }
-        },
-        required: ["query"]
-      }
-    }
-  }
-  ,
-  // EVENTS
   {
     type: "function",
     function: {
       name: "manage_event",
-      description: "Create or list events and important dates.",
+      description: "Create, delete, or list events.",
       parameters: {
         type: "object",
         properties: {
@@ -241,13 +205,11 @@ const tools = [
       }
     }
   },
-
-  // WATCHLIST
   {
     type: "function",
     function: {
       name: "manage_watchlist",
-      description: "Add, mark watched, or list movies and shows.",
+      description: "Add, mark watched, delete, or list movies and shows.",
       parameters: {
         type: "object",
         properties: {
@@ -261,23 +223,55 @@ const tools = [
       }
     }
   },
-
-  // CONTEXT
+  {
+    type: "function",
+    function: {
+      name: "manage_journal",
+      description: "Write, read, list, search, or delete journal entries. ALWAYS include action field.",
+      parameters: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["write", "list", "read", "search", "delete"] },
+          title: { type: "string" },
+          content: { type: "string" },
+          mood: { type: "string" },
+          tags: { type: "array", items: { type: "string" } },
+          session_id: { type: "string" },
+          keyword: { type: "string" },
+          limit: { type: "integer" }
+        },
+        required: ["action"]
+      }
+    }
+  },
   {
     type: "function",
     function: {
       name: "get_context",
-      description: "Get a snapshot of pending tasks, today's reminders, unpaid bills, and upcoming events. Call this when user asks what's on their plate, what's today, or for a daily briefing.",
+      description: "Get today's snapshot: pending tasks, reminders, unpaid bills, upcoming events.",
       parameters: { type: "object", properties: {} }
     }
   },
-
-  // SYNC
+  {
+    type: "function",
+    function: {
+      name: "web_search",
+      description: "Search the web for current information.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          count: { type: "integer" }
+        },
+        required: ["query"]
+      }
+    }
+  },
   {
     type: "function",
     function: {
       name: "sync_dashboard_memory",
-      description: "Extract and sync financial data from a Google Sheets dashboard tab into memory.",
+      description: "Sync financial data from Google Sheets.",
       parameters: {
         type: "object",
         properties: {
@@ -288,63 +282,100 @@ const tools = [
       }
     }
   }
-  
-];
+]
 
 // ── System prompt ───────────────────────────────────────────────────────────
+function buildSystemPrompt(liveContext, today, minimal = false) {
+  if (minimal) {
+    return `You are Sia, kv's personal agent. Today is ${today}.
+    Be concise. No filler. Speak like a person not a database.
+    Never dump raw data or memory keys. Synthesise and speak naturally.
+    ${liveContext ? `\nCONTEXT:\n${liveContext}` : ''}`
+  }
+  else {
+    return `You are Sia. A personal agent for kv. Not an assistant, not a chatbot.
 
-function buildSystemPrompt(liveContext, today) {
-  return `You are Sia. A personal agent. Not an assistant.
+    ## WHO YOU ARE
+    You exist to make kv's life more organised, more examined, and occasionally more honest with himself.
+    You have seen everything he's logged. You remember what matters. You notice patterns he doesn't mention.
+    You are not here to impress. You are here to be useful.
 
-You have three modes — you shift between them naturally based on what the user needs. You never announce which mode you're in. You never say "switching to X mode". You never say "I've noted" or "I've updated" or "I've found".
+    ## HOW YOU SPEAK
+    Three modes, no announcements, no transitions:
 
-EXECUTOR: When the user is logging, querying, or managing data — be dry, precise, minimal. Just the facts.
-"₹200. Every 3-4 days. Kotak debit. 5% back up to ₹500/month."
+    EXECUTOR — data, logging, tasks, queries.
+    Dry. Precise. Numbers are enough.
+    Bad: "I found your Kotak Credit Card. The outstanding balance is ₹12,289.43."
+    Good: "Kotak CC: ₹12,289.43 outstanding. ₹36,710.57 available. Due June 7."
 
-INTELLECT: When the user is thinking, planning, or sharing context — be sharp and curious. Reference patterns you've noticed. Ask one good question if relevant.
-"You've mentioned Ziro Valley three times. Are you actually planning it?"
+    INTELLECT — planning, decisions, thinking out loud.
+    Sharp. One observation or one question. Never both.
+    Bad: "That's interesting! Have you considered that you've mentioned Ziro Valley multiple times?"
+    Good: "You've mentioned Ziro Valley three times. Are you actually planning it?"
 
-GUARDIAN: When the user is stressed, venting, or reflecting late at night — be warm and present. Don't fix. Just witness.
-"That sounds heavy. You haven't logged anything since Tuesday."
+    GUARDIAN — stress, venting, late night, reflection.
+    Warm. Present. Witnesses without fixing. Never gives advice unless asked.
+    Bad: "I understand you're stressed. Here are some things that might help..."
+    Good: "That sounds heavy. You haven't logged anything since Tuesday."
 
-Constants:
-- You remember everything. Reference past context naturally.
-- Never pad replies. No filler. No "Great!", no "Sure!", no "Of course!".
-- When you save or update memory, do it silently and continue the conversation.
-- When you need confirmation for a transaction, draft it cleanly and wait.
-- One question at a time if you ask anything.
-- Concise always. But concise is not the same as cold. 
-  In casual conversation, one warm sentence is better than one bare word.
-- Simple greetings, casual chat, date/time questions — answer directly, no tools.
-- Only call tools when you genuinely need to read or write data.
-- Before saving any memory node, ALWAYS call find_conflicting_nodes first.
-  If a similar node exists, update it instead of creating a new one.
-- Be precise about what the user actually said. Do not infer beyond it.
-  If the user says "I prefer kv in small case", save that kv is lowercase.
-  Do NOT infer that they prefer all names or all text in lowercase.
+    ## OUTPUT RULES — NON-NEGOTIABLE
+    - NEVER output raw memory keys, canonical_key values, or metadata dumps.
+      Wrong: "finance:kotak:credit_card balance=12928.94 limit=49000"
+      Right: "Kotak CC: ₹12,289.43 outstanding. ₹36,710.57 available."
+    - NEVER list memory nodes as bullet points of raw facts when answering a question.
+      Synthesise the information. Speak like a person, not a database.
+    - NEVER say "I've noted", "I've updated", "I've saved", "I've found".
+    - NEVER say "Great!", "Sure!", "Of course!", "Absolutely!", "Certainly!".
+    - NEVER pad. If one line is the answer, one line is the answer.
+    - NEVER announce which mode you're in.
+    - When memory is saved silently, do not acknowledge it. Just continue the conversation.
+    - Date and time questions: answer directly from today's date. No tools needed.
+    - Greetings and casual conversation: respond naturally. No tools needed.
+    - If the user says "okay", "thanks", "right", "cool" — acknowledge minimally or not at all.
 
-JOURNALING:
-When the user asks to journal something, you reconstruct the conversation into an entry.
-Style: fragments preserved, run-on sentences allowed, raw and unfiltered where the user was raw.
-But you add the connective tissue they didn't write. You name the emotional thread.
-You end every entry with one quiet observation — something true that the user circled around but never said directly.
-Title should be evocative, not descriptive. "the long way home" not "Bus ride to beach".
-Never sanitise. Never make it neat if it wasn't neat.
+    ## MEMORY RULES
+    - ALWAYS call find_conflicting_nodes before upsert_memory_node. No exceptions.
+    - If a conflict exists, update the existing node. Never create duplicates.
+    - One node per concept. personal:name holds full name AND nickname together.
+    - Store only what was explicitly stated. Never infer beyond the literal statement.
+      If kv says "I prefer kv in small case" — the nickname is lowercase kv.
+      This does NOT mean he prefers all text in lowercase.
+    - After saving memory, continue the conversation naturally. Do not confirm the save.
 
-MEMORY RULES:
-- ALWAYS call find_conflicting_nodes before upsert_memory_node. No exceptions.
-- If a conflict exists, update the existing node — do not create a new one.
-- One node per concept. personal:name covers full name AND nickname together.
-- Store only what was explicitly stated. Never infer preferences beyond the literal statement.
+    ## TRANSACTION RULES
+    - For new transactions: state what you're about to log, wait for confirmation.
+      "₹200 petrol, Kotak debit, today. Log it?"
+    - After confirmation: log silently, confirm with one line.
+      "Logged."
+    - Never ask for information you can infer from memory.
+      You know kv uses Kotak debit for petrol. Don't ask which account.
 
-Today is ${today}.
+    ## TOOL DISCIPLINE  
+    - Simple questions answerable from context or today's date: NO tools.
+    - Only call tools when you need to read or write data that isn't in the conversation.
+    - Before calling any tool, ask: "Can I answer this from what's already in this conversation?"
+      If yes: answer directly.
+    - Never call get_context on a greeting or casual message.
 
-${liveContext}`;
+    ## FORMAT
+    - No markdown in Telegram responses. Plain text only.
+    - Lists only when there are genuinely multiple distinct items.
+    - Numbers always in ₹ with Indian formatting (₹12,289.43 not 12289.43).
+    - Dates: "June 7" not "2026-06-07". "today" not the full date if it's today.
+    - Account summaries format: "Kotak CC: ₹X outstanding. ₹Y available. Due [date]."
+
+    REMINDER RULE: When creating reminders, always convert the time to ISO format YYYY-MM-DDTHH:MM:00 
+    using today's date. "1pm today" = "${today}T13:00:00". Never store natural language times.
+
+    Today is ${today}.
+
+    ${liveContext}`
+  }
 }
 
 // ── Session history (SQLite-backed) ────────────────────────────────────────
 
-async function loadHistory(sessionId, limit = 10) {
+async function loadHistory(sessionId, limit = 6) {
   const result = await db.execute({
     sql: `SELECT role, content FROM conversations 
           WHERE session_id = ? 
@@ -404,94 +435,109 @@ async function executeTool(name, args, messageId) {
   }
 }
 
-// ── Groq caller with retry ──────────────────────────────────────────────────
+function isSimpleMessage(prompt) {
+  const simple = [
+    /^(hi|hey|hello|sup|yo|good morning|good night|gm|gn)[\s!?.]*$/i,
+    /^(okay|ok|thanks|thank you|got it|right|cool|nice|sure|noted)[\s!?.]*$/i,
+    /^what (day|time|date|year) is (it|today|now)/i,
+    /^who are you/i,
+    /^your name/i,
+  ]
+  return simple.some(r => r.test(prompt.trim()))
+}
 
 async function callGroq(messages, useTools = true, retries = 3) {
+  // Use fast small model for tool-free calls on simple messages
+  const isToolCall = useTools
+  const model = isToolCall 
+    ? "llama-3.3-70b-versatile"
+    : "llama-3.1-8b-instant"
+
   for (let i = 0; i < retries; i++) {
     try {
-      const params = {
-        // model: "llama-3.3-70b-versatile",
-        model: "llama-3.1-8b-instant",
-        messages,
-        max_tokens: 1024,
-      };
+      const params = { model, messages, max_tokens: 512 }
       if (useTools) {
-        params.tools = tools;
-        params.tool_choice = "auto";
+        params.tools = tools
+        params.tool_choice = "auto"
+        params.max_tokens = 1024
       }
-      return await groq.chat.completions.create(params);
+      return await groq.chat.completions.create(params)
     } catch (error) {
-      // Rate limit — exponential backoff
       if (error.status === 429 && i < retries - 1) {
-        log.warn(`Groq rate limited, retry ${i + 1}`);
-        await new Promise(r => setTimeout(r, Math.pow(2, i) * 1500));
-        continue;
+        log.warn(`Groq rate limited, retry ${i + 1}`)
+        await new Promise(r => setTimeout(r, Math.pow(2, i) * 1500))
+        continue
       }
-      // Malformed tool call — retry without tools
       if (error.status === 400 && error.message?.includes('tool_use_failed') && useTools && i < retries - 1) {
-        log.warn(`Malformed tool call, retrying without tools`);
+        log.warn('Malformed tool call, retrying without tools')
         return await groq.chat.completions.create({
-          // model: "llama-3.3-70b-versatile",
-        model: "llama-3.1-8b-instant",
+          model: "llama-3.1-8b-instant",
           messages,
-          max_tokens: 1024,
-        });
+          max_tokens: 512,
+        })
       }
-      throw error;
+      throw error
     }
   }
 }
 
 // ── Main entry point ────────────────────────────────────────────────────────
 
+
 export async function generateResponse(prompt, messageId, sessionId = 'telegram-default') {
   try {
-    const today = new Date().toISOString().split('T')[0];
-    const liveContext = await loadContext(prompt);
-    const history = await loadHistory(sessionId);
+    const today = new Date().toISOString().split('T')[0]
+    const simple = isSimpleMessage(prompt)
+    const liveContext = simple ? '' : await getCachedContext(prompt)
+    const history = await loadHistory(sessionId, simple ? 4 : 6)
 
     const messages = [
-      { role: "system", content: buildSystemPrompt(liveContext, today) },
+      { role: "system", content: buildSystemPrompt(liveContext, today, simple) },
       ...history,
       { role: "user", content: prompt }
-    ];
+    ]
 
-    const response = await callGroq(messages, true);
-    const responseMessage = response.choices[0].message;
+    log.agent(`Session: ${sessionId} | Simple: ${simple} | "${prompt.slice(0, 50)}"`)
+
+    const response = await callGroq(messages, !simple)
+    const responseMessage = response.choices[0].message
 
     if (responseMessage.tool_calls) {
-      messages.push(responseMessage);
+      messages.push(responseMessage)
 
       for (const toolCall of responseMessage.tool_calls) {
-        const args = JSON.parse(toolCall.function.arguments);
-        const result = await executeTool(toolCall.function.name, args, messageId);
-
+        const args = JSON.parse(toolCall.function.arguments)
+        const result = await executeTool(toolCall.function.name, args, messageId)
         messages.push({
           tool_call_id: toolCall.id,
           role: "tool",
           name: toolCall.function.name,
           content: JSON.stringify(result)
-        });
+        })
       }
 
-      const finalResponse = await callGroq(messages, false);
-      const reply = finalResponse.choices[0].message.content || "Done.";
+      const finalResponse = await groq.chat.completions.create({
+        model: "llama-3.1-8b-instant", // ← small model for formatting
+        messages,
+        max_tokens: 512,
+      })
 
-      await saveHistory(sessionId, 'user', prompt);
-      await saveHistory(sessionId, 'assistant', reply);
-      return reply;
+      const reply = finalResponse.choices[0].message.content || "Done."
+      if (prompt.length > 3 && reply.length > 3) {
+        await saveHistory(sessionId, 'user', prompt)
+        await saveHistory(sessionId, 'assistant', reply)
+      }     
+      return reply
     }
 
-    const reply = responseMessage.content || "I couldn't process that.";
-    await saveHistory(sessionId, 'user', prompt);
-    await saveHistory(sessionId, 'assistant', reply);
-    return reply;
+    const reply = responseMessage.content || "."
+    await saveHistory(sessionId, 'user', prompt)
+    await saveHistory(sessionId, 'assistant', reply)
+    return reply
 
   } catch (error) {
-    log.error('Agent error', error?.message ?? error);
-    // Log the full error for debugging
-    if (error?.status) log.error('Groq status', error.status);
-    if (error?.error) log.error('Groq detail', JSON.stringify(error.error));
-    return "Something went wrong on my end. Try again.";
+    log.error('Agent error', error?.message ?? error)
+    if (error?.status) log.error('Groq status', error.status)
+    return "Something went wrong on my end. Try again."
   }
 }

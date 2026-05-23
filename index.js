@@ -7,6 +7,7 @@ import cors from 'cors';
 import { startMorningBriefing } from './src/cron/morning.js';
 import { initializeDatabase } from './src/config/database.js';
 import { getBot, initializeBot } from './src/bot/telegram.js';
+import { startReminderChecker } from './src/cron/reminders.js'
 
 import taskRoutes     from './src/routes/tasks.routes.js';
 import financeRoutes  from './src/routes/finance.routes.js';
@@ -51,7 +52,6 @@ app.use('/api', memoryRoutes);
 app.use('/api', adminRoutes);
 app.use('/api', journalRoutes);
 app.use('/api', dataRoutes)
-
 const PORT = process.env.PORT || 3000;
 
 async function start() {
@@ -71,10 +71,12 @@ async function start() {
     await bot.telegram.setWebhook(`${process.env.SERVER_DOMAIN}${WEBHOOK_PATH}`);
     console.log(`[SYSTEM] Webhook → ${process.env.SERVER_DOMAIN}${WEBHOOK_PATH}`);
     startMorningBriefing(bot); // ← after everything is ready
+    startReminderChecker(bot)
   } else {
     bot.launch();
     console.log(`[SYSTEM] Polling started.`);
     startMorningBriefing(bot); // ← works in dev too for testing
+    startReminderChecker(bot);
   }
 }
 

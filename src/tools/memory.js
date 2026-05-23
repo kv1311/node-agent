@@ -123,7 +123,7 @@ export async function loadContext(conversationText = '') {
     // If we have keywords, surface relevant nodes first
     if (keywords.length > 0) {
       const conditions = keywords.map(() => `(label LIKE ? OR canonical_key LIKE ?)`).join(' OR ');
-      sql += ` ORDER BY CASE WHEN ${conditions} THEN 0 ELSE 1 END, updated_at DESC LIMIT 30`;
+      sql += ` ORDER BY CASE WHEN ${conditions} THEN 0 ELSE 1 END, updated_at DESC LIMIT 12`;
       keywords.forEach(k => { args.push(`%${k}%`); args.push(`%${k}%`); });
     } else {
       sql += ` ORDER BY updated_at DESC LIMIT 20`;
@@ -139,15 +139,17 @@ export async function loadContext(conversationText = '') {
       if (!grouped[type]) grouped[type] = [];
       grouped[type].push({ key: node.canonical_key, label: node.label, ...meta });
     }
+    
+    let context = "MEMORY:\n"
+    for (const node of nodes.rows) {
+        const meta = JSON.parse(node.metadata || '{}')
+        const metaStr = Object.keys(meta).length 
+            ? ` (${Object.entries(meta).map(([k,v]) => `${k}:${v}`).join(', ')})`
+            : ''
+        context += `${node.canonical_key}: ${node.label}${metaStr}\n`
+        }
+    return context
 
-    let context = "=== SIA'S MEMORY ===\n\n";
-    for (const [type, items] of Object.entries(grouped)) {
-      context += `${type.toUpperCase()}:\n`;
-      items.forEach(n => { context += `  • ${n.label}\n`; });
-      context += '\n';
-    }
-    context += "=== END MEMORY ===";
-    return context;
   } catch (error) {
     console.error("loadContext error:", error);
     return '';

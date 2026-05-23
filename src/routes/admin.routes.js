@@ -88,4 +88,26 @@ router.get('/admin/stats', async (req, res) => {
   }
 });
 
+router.get('/logs', (req, res) => {
+  try {
+    const lines = parseInt(req.query.lines ?? '100')
+    const raw = execSync(`pm2 logs --nostream --lines ${lines} 2>/dev/null`).toString()
+    const parsed = raw
+      .split('\n')
+      .filter(Boolean)
+      .slice(-lines)
+      .map(line => {
+        let level = 'info'
+        if (line.includes('[WARN]') || line.includes('warn')) level = 'warn'
+        else if (line.includes('[ERROR]') || line.includes('error')) level = 'error'
+        else if (line.includes('[CRON]')) level = 'cron'
+        else if (line.includes('[AGENT]') || line.includes('Session:')) level = 'agent'
+        else if (line.includes('[TOOL]')) level = 'tool'
+        return { line, level }
+      })
+    res.json(parsed)
+  } catch {
+    res.json([])
+  }
+})
 export default router;
