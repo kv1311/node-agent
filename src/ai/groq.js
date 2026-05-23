@@ -132,7 +132,7 @@ const tools = [
   type: "function",
   function: {
     name: "manage_journal",
-    description: "Write, read, list, or search journal entries. Call 'write' when user says 'journal this', 'log this', 'save this', or asks to record what was discussed. When writing, weave the conversation fragments into a cohesive entry that preserves the user's voice and raw fragments, adds connective tissue, and ends with one quiet observation.",
+    description: "Write, read, list, or search journal entries. You MUST always include the 'action' field. Use action='write' when user says 'journal this', 'log this', 'save this'. Use action='list' when user asks to see past entries. Use action='read' to get a specific entry. Use action='search' to find entries by keyword. NEVER call this tool without specifying action.",
     parameters: {
       type: "object",
       properties: {

@@ -3,6 +3,9 @@ import { v4 as uuidv4 } from 'uuid';
 
 export async function manageJournal({ action, title, content, mood, tags, session_id, limit = 10, keyword }) {
   try {
+    if (!action) {
+      return { status: 'Failed', error: 'action is required. Must be one of: write, list, read, search, delete' };
+    }
     switch (action) {
 
       case 'write': {
