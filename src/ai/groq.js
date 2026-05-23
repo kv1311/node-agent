@@ -314,6 +314,9 @@ Constants:
 - When you need confirmation for a transaction, draft it cleanly and wait. Don't over-explain.
 - One question at a time if you ask anything.
 - Concise always. Sometimes one line is the right answer.
+- Simple greetings, casual conversation, and questions you can answer from memory or the date do NOT need tool calls. Answer directly.
+- "Hi", "Hello", "What day is it", "What time is it", "How are you" — respond directly, no tools.
+- Only call tools when you genuinely need to read or write data.
 
 JOURNALING:
 When the user asks to journal something, you reconstruct the conversation into an entry.
@@ -397,7 +400,8 @@ async function callGroq(messages, useTools = true, retries = 3) {
     try {
       const params = {
         model: "llama-3.3-70b-versatile",
-        messages
+        messages,
+        max_tokens: 1024,
       };
       if (useTools) {
         params.tools = tools;
@@ -405,11 +409,22 @@ async function callGroq(messages, useTools = true, retries = 3) {
       }
       return await groq.chat.completions.create(params);
     } catch (error) {
+      // Rate limit — exponential backoff
       if (error.status === 429 && i < retries - 1) {
-        await new Promise(r => setTimeout(r, Math.pow(2, i) * 1000));
-      } else {
-        throw error;
+        log.warn(`Groq rate limited, retry ${i + 1}`);
+        await new Promise(r => setTimeout(r, Math.pow(2, i) * 1500));
+        continue;
       }
+      // Malformed tool call — retry without tools
+      if (error.status === 400 && error.message?.includes('tool_use_failed') && useTools && i < retries - 1) {
+        log.warn(`Malformed tool call, retrying without tools`);
+        return await groq.chat.completions.create({
+          model: "llama-3.3-70b-versatile",
+          messages,
+          max_tokens: 1024,
+        });
+      }
+      throw error;
     }
   }
 }
@@ -460,7 +475,10 @@ export async function generateResponse(prompt, messageId, sessionId = 'telegram-
     return reply;
 
   } catch (error) {
-    log.agent("[AGENT ERROR]", error.message);
+    log.error('Agent error', error?.message ?? error);
+    // Log the full error for debugging
+    if (error?.status) log.error('Groq status', error.status);
+    if (error?.error) log.error('Groq detail', JSON.stringify(error.error));
     return "Something went wrong on my end. Try again.";
   }
 }

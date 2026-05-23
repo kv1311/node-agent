@@ -15,6 +15,8 @@ import chatRoutes     from './src/routes/chat.routes.js';
 import memoryRoutes   from './src/routes/memory.routes.js';
 import adminRoutes    from './src/routes/admin.routes.js';
 import journalRoutes from './src/routes/journal.routes.js';
+import dataRoutes from './src/routes/data.routes.js'
+
 
 import { requestLogger, consoleLogger } from './src/middleware/logger.js';
 import { apiLimiter, chatLimiter } from './src/middleware/rateLimiter.js';
@@ -48,6 +50,7 @@ app.use('/api', chatRoutes);
 app.use('/api', memoryRoutes);
 app.use('/api', adminRoutes);
 app.use('/api', journalRoutes);
+app.use('/api', dataRoutes)
 
 const PORT = process.env.PORT || 3000;
 
