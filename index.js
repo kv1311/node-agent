@@ -49,17 +49,6 @@ app.use('/api', memoryRoutes);
 app.use('/api', adminRoutes);
 app.use('/api', journalRoutes);
 
-if (process.env.ENVIRONMENT === 'production') {
-  startMorningBriefing(bot);
-  const WEBHOOK_PATH = `/telegraf/${process.env.TELEGRAM_BOT_TOKEN}`;
-  app.use(bot.webhookCallback(WEBHOOK_PATH));
-  bot.telegram.setWebhook(`${process.env.SERVER_DOMAIN}${WEBHOOK_PATH}`);
-  console.log(`[SYSTEM] Webhook → ${process.env.SERVER_DOMAIN}${WEBHOOK_PATH}`);
-} else {
-  bot.launch();
-  console.log(`[SYSTEM] Polling started.`);
-}
-
 const PORT = process.env.PORT || 3000;
 
 async function start() {
