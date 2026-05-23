@@ -16,6 +16,9 @@ import memoryRoutes   from './src/routes/memory.routes.js';
 import adminRoutes    from './src/routes/admin.routes.js';
 import journalRoutes from './src/routes/journal.routes.js';
 
+import { requestLogger, consoleLogger } from './src/middleware/logger.js';
+import { apiLimiter, chatLimiter } from './src/middleware/rateLimiter.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
@@ -29,6 +32,13 @@ app.use(cors({
 }));
 
 app.use(express.json());
+
+
+app.use(consoleLogger);
+app.use(requestLogger);
+
+app.use('/api', apiLimiter);
+app.use('/api/chat', chatLimiter);
 
 // Mount routes
 app.use('/api', taskRoutes);

@@ -1,0 +1,22 @@
+import morgan from 'morgan';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Write to file + console
+const logDir = path.join(__dirname, '../../logs');
+if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
+
+const logStream = fs.createWriteStream(
+  path.join(logDir, 'access.log'), 
+  { flags: 'a' }
+);
+
+export const requestLogger = morgan(
+  '[:date[iso]] :method :url :status :response-time ms',
+  { stream: logStream }
+);
+
+export const consoleLogger = morgan('dev');

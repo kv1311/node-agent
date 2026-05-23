@@ -16,8 +16,10 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.5.2",
     "googleapis": "^172.0.0",
     "groq-sdk": "^1.2.0",
+    "morgan": "^1.10.1",
     "node-cron": "^4.2.1",
     "telegraf": "^4.16.3",
     "uuid": "^14.0.0"
