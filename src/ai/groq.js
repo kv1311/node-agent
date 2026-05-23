@@ -410,7 +410,8 @@ async function callGroq(messages, useTools = true, retries = 3) {
   for (let i = 0; i < retries; i++) {
     try {
       const params = {
-        model: "llama-3.3-70b-versatile",
+        // model: "llama-3.3-70b-versatile",
+        model: "llama-3.1-8b-instant",
         messages,
         max_tokens: 1024,
       };
@@ -430,7 +431,8 @@ async function callGroq(messages, useTools = true, retries = 3) {
       if (error.status === 400 && error.message?.includes('tool_use_failed') && useTools && i < retries - 1) {
         log.warn(`Malformed tool call, retrying without tools`);
         return await groq.chat.completions.create({
-          model: "llama-3.3-70b-versatile",
+          // model: "llama-3.3-70b-versatile",
+        model: "llama-3.1-8b-instant",
           messages,
           max_tokens: 1024,
         });
