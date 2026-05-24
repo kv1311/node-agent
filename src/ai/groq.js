@@ -516,125 +516,189 @@ async function callGroq(messages, tools = null) {
   }
   return await groq.chat.completions.create(params)
 }
+// ── Background decision ─────────────────────────────────────────────
+function needsBackground(prompt, intent) {
+  // Tasks that can wait (e.g., long analysis, syncs, weekly reports)
+  const backgroundIntents = ['finance_sync', 'weekly_report', 'memory_enrichment'];
+  if (backgroundIntents.includes(intent)) return true;
+  // Long prompts that might be batch work
+  if (prompt.length > 800 && intent === 'general') return true;
+  return false;
+}
 
+// Simple in-memory storage for delayed replies (or use DB)
+async function storeDelayedResponse(sessionId, reply) {
+  pendingReplies.set(sessionId, reply);
+  // Optional: send via webhook later – for now just store
+  console.log(`[BACKGROUND] Stored reply for ${sessionId}`);
+}
+
+// ── OpenRouter free model (Nemotron) ───────────────────────────────
+async function callOpenRouterFree(messages, systemPrompt) {
+  const MODEL_ID = 'nvidia/nemotron-3-nano-30b-a3b:free';
+  const formattedMessages = [
+    { role: 'system', content: systemPrompt },
+    ...messages.filter(m => m.role !== 'system')
+  ];
+
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: MODEL_ID,
+      messages: formattedMessages,
+      max_tokens: 1024,
+      temperature: 0.7,
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`OpenRouter error ${response.status}: ${err}`);
+  }
+  const data = await response.json();
+  return data.choices[0].message.content;
+}
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 export async function generateResponse(prompt, messageId, sessionId = 'telegram-default') {
   try {
-    const today = new Date().toISOString().split('T')[0]
-    const simple = isSimpleMessage(prompt)
-    const intent = simple ? 'simple' : classifyIntent(prompt)
+    const today = new Date().toISOString().split('T')[0];
+    const simple = isSimpleMessage(prompt);
+    const intent = simple ? 'simple' : classifyIntent(prompt);
 
-    // After classifying intent
-    if (needsBackground(prompt, intent)) {
-      // Return "processing" token immediately, run in background
+    // ── BACKGROUND PATH: for slow, non-interactive tasks ──────────────
+    if (!simple && needsBackground(prompt, intent)) {
+      // We need messages and systemPrompt – build them first
+      const historyLimit = 3; // shorter history for background
+      const history = await loadHistory(sessionId, historyLimit);
+      const liveContext = await getCachedContext(prompt, intent);
+      const systemPromptBg = buildSystemPrompt(liveContext, today, false);
+      const messagesBg = [
+        { role: 'system', content: systemPromptBg },
+        ...history,
+        { role: 'user', content: prompt },
+      ];
+
       enqueue(`${sessionId}-${Date.now()}`, async () => {
-        const reply = await callOpenRouterFree(messages, systemPrompt);
-        await saveHistory(sessionId, 'assistant', reply);
-        // Optional: send reply via webhook or store for later fetch
-        await storeDelayedResponse(sessionId, reply);
+        try {
+          const reply = await callOpenRouterFree(messagesBg, systemPromptBg);
+          await saveHistory(sessionId, 'assistant', reply);
+          await storeDelayedResponse(sessionId, reply);
+          // Optionally send via Telegram webhook if you have bot instance
+        } catch (err) {
+          log.error(`Background job failed: ${err.message}`);
+        }
       });
       return "🔄 I'm working on that in the background. I'll notify you when it's ready.";
     }
-    // else fast path: Groq → Gemini
 
-    // History: short for simple/action intents, longer for conversational
-    const historyLimit = simple ? 2 : (intent === 'general' ? 6 : 3)
-    const history = await loadHistory(sessionId, historyLimit)
-
-    // Context: keyed by intent so finance messages get finance-relevant nodes
-    const liveContext = simple ? '' : await getCachedContext(prompt, intent)
-    const systemPrompt = buildSystemPrompt(liveContext, today, simple)
+    // ── NORMAL PATH: determine history length ────────────────────────
+    const historyLimit = simple ? 2 : (intent === 'general' ? 6 : 3);
+    const history = await loadHistory(sessionId, historyLimit);
+    const liveContext = simple ? '' : await getCachedContext(prompt, intent);
+    const systemPrompt = buildSystemPrompt(liveContext, today, simple);
 
     const messages = [
       { role: 'system', content: systemPrompt },
       ...history,
       { role: 'user', content: prompt },
-    ]
+    ];
 
-    log.agent(`Session: ${sessionId} | Intent: ${intent} | "${prompt.slice(0, 50)}"`)
+    log.agent(`Session: ${sessionId} | Intent: ${intent} | "${prompt.slice(0, 50)}"`);
 
-    // ── SIMPLE MESSAGES → Gemini directly (saves all Groq quota) ─────────────
+    // ── SIMPLE MESSAGES → Gemini (fast, cheap) ────────────────────────
     if (simple) {
       try {
-        const reply = await callGemini(messages, systemPrompt)
-        const cleaned = reply?.trim() || '.'
-        await saveHistory(sessionId, 'user', prompt)
-        await saveHistory(sessionId, 'assistant', cleaned)
-        return cleaned
+        const reply = await callGemini(messages, systemPrompt);
+        const cleaned = reply?.trim() || '.';
+        await saveHistory(sessionId, 'user', prompt);
+        await saveHistory(sessionId, 'assistant', cleaned);
+        return cleaned;
       } catch (geminiErr) {
-        log.warn('Gemini simple path failed, falling back to Groq:', geminiErr?.message)
-        // Fall through to Groq below
+        log.warn('Gemini simple path failed, falling back to Groq:', geminiErr?.message);
       }
     }
 
-    // ── TOOL INTENTS → Groq with filtered tool set ───────────────────────────
+    // ── FOR NON‑SIMPLE: Try Nemotron FIRST (fast, no tools) ───────────
+    // But if the intent requires tools, skip Nemotron and go straight to Groq.
+    const needsTools = intent !== 'simple' && getToolsForIntent(intent).length > 0;
+    
+    if (!needsTools && !simple) {
+      try {
+        const reply = await callOpenRouterFree(messages, systemPrompt);
+        const cleaned = reply?.trim() || '.';
+        await saveHistory(sessionId, 'user', prompt);
+        await saveHistory(sessionId, 'assistant', cleaned);
+        return cleaned;
+      } catch (nemotronErr) {
+        log.warn(`Nemotron failed (${nemotronErr.message}), falling back to Groq`);
+      }
+    }
+
+    // ── TOOL INTENTS or fallback from Nemotron → Groq ─────────────────
     try {
-      const selectedTools = getToolsForIntent(intent)
-      const response = await callGroq(messages, selectedTools)
-      const responseMessage = response.choices[0].message
+      const selectedTools = getToolsForIntent(intent);
+      const response = await callGroq(messages, selectedTools);
+      const responseMessage = response.choices[0].message;
 
-      // Tool calls path
       if (responseMessage.tool_calls) {
-        messages.push(responseMessage)
-
+        messages.push(responseMessage);
         for (const toolCall of responseMessage.tool_calls) {
-          const args = JSON.parse(toolCall.function.arguments)
-          const result = await executeTool(toolCall.function.name, args, messageId)
+          const args = JSON.parse(toolCall.function.arguments);
+          const result = await executeTool(toolCall.function.name, args, messageId);
           messages.push({
             tool_call_id: toolCall.id,
             role: 'tool',
             name: toolCall.function.name,
             content: JSON.stringify(result),
-          })
+          });
         }
-
-        // Small fast model for final formatting
         const finalResponse = await groq.chat.completions.create({
           model: 'llama-3.1-8b-instant',
           messages,
           max_tokens: 512,
-        })
-
-        const reply = finalResponse.choices[0].message.content || 'Done.'
+        });
+        const reply = finalResponse.choices[0].message.content || 'Done.';
         if (prompt.length > 3 && reply.length > 3) {
-          await saveHistory(sessionId, 'user', prompt)
-          await saveHistory(sessionId, 'assistant', reply)
+          await saveHistory(sessionId, 'user', prompt);
+          await saveHistory(sessionId, 'assistant', reply);
         }
-        return reply
+        return reply;
       }
 
-      // Direct response (no tools needed)
-      const reply = responseMessage.content || '.'
-      await saveHistory(sessionId, 'user', prompt)
-      await saveHistory(sessionId, 'assistant', reply)
-      return reply
+      const reply = responseMessage.content || '.';
+      await saveHistory(sessionId, 'user', prompt);
+      await saveHistory(sessionId, 'assistant', reply);
+      return reply;
 
     } catch (groqError) {
-      const isTransient = groqError?.status === 429 || groqError?.status >= 500
+      const isTransient = groqError?.status === 429 || groqError?.status >= 500;
       if (!isTransient) {
-        log.error('Groq non-retriable error:', groqError?.message)
-        return 'Something went wrong on my end. Try again.'
+        log.error('Groq non-retriable error:', groqError?.message);
+        return 'Something went wrong on my end. Try again.';
       }
-
-      log.warn(`Groq failed (${groqError?.status}) — trying Gemini`)
+      log.warn(`Groq failed (${groqError?.status}) — trying Gemini`);
     }
 
-    // ── GEMINI FALLBACK — for transient Groq failures ─────────────────────────
+    // ── FINAL FALLBACK: Gemini ────────────────────────────────────────
     try {
-      await new Promise(r => setTimeout(r, 500))
-      const reply = await callGemini(messages, systemPrompt)
-      const cleaned = reply?.trim() || 'Done.'
-      await saveHistory(sessionId, 'user', prompt)
-      await saveHistory(sessionId, 'assistant', cleaned)
-      return cleaned
+      await new Promise(r => setTimeout(r, 500));
+      const reply = await callGemini(messages, systemPrompt);
+      const cleaned = reply?.trim() || 'Done.';
+      await saveHistory(sessionId, 'user', prompt);
+      await saveHistory(sessionId, 'assistant', cleaned);
+      return cleaned;
     } catch (geminiError) {
-      log.error('Gemini fallback also failed:', geminiError?.message)
-      return 'Both services are temporarily unavailable. Try again in a moment.'
+      log.error('Gemini fallback also failed:', geminiError?.message);
+      return 'Both services are temporarily unavailable. Try again in a moment.';
     }
 
   } catch (error) {
-    log.error('Agent error:', error?.message ?? error)
-    return 'Something went wrong on my end. Try again.'
+    log.error('Agent error:', error?.message ?? error);
+    return 'Something went wrong on my end. Try again.';
   }
 }
