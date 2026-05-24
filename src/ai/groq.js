@@ -12,25 +12,27 @@ import { webSearch } from '../tools/search.js'
 import { log } from '../utils/log.js'
 import { manageJournal } from '../tools/journal.js'
 
-// ── Clients ──────────────────────────────────────────────────────────────────
+// ── Clients ───────────────────────────────────────────────────────────────────
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 const gemini = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
 
-// ── Context cache (60s) ───────────────────────────────────────────────────────
+// ── Context cache — keyed by INTENT, not single key ──────────────────────────
+// Prevents finance questions from getting task-optimised context and vice versa
 
 const contextCache = new Map()
+const CACHE_TTL = 60_000 // 60 seconds
 
-async function getCachedContext(prompt) {
-  const cached = contextCache.get('context')
-  if (cached && Date.now() - cached.time < 60_000) return cached.value
+async function getCachedContext(prompt, intent) {
+  const cacheKey = intent ?? 'general'
+  const cached = contextCache.get(cacheKey)
+  if (cached && Date.now() - cached.time < CACHE_TTL) return cached.value
   const value = await loadContext(prompt)
-  contextCache.set('context', { value, time: Date.now() })
+  contextCache.set(cacheKey, { value, time: Date.now() })
   return value
 }
 
-// ── Tool definitions ──────────────────────────────────────────────────────────
-// Grouped so we only send relevant tools per intent — saves ~800-1200 tokens/msg
+// ── Tool definitions — grouped by intent ─────────────────────────────────────
 
 const TOOL_DEFS = {
   memory: [
@@ -58,10 +60,7 @@ const TOOL_DEFS = {
         description: 'Check for duplicate memory before saving.',
         parameters: {
           type: 'object',
-          properties: {
-            label: { type: 'string' },
-            type: { type: 'string' },
-          },
+          properties: { label: { type: 'string' }, type: { type: 'string' } },
           required: ['label', 'type'],
         },
       },
@@ -289,10 +288,7 @@ const TOOL_DEFS = {
         description: 'Search the web for current information.',
         parameters: {
           type: 'object',
-          properties: {
-            query: { type: 'string' },
-            count: { type: 'integer' },
-          },
+          properties: { query: { type: 'string' }, count: { type: 'integer' } },
           required: ['query'],
         },
       },
@@ -300,7 +296,7 @@ const TOOL_DEFS = {
   ],
 }
 
-// ── Intent classifier (zero tokens — pure regex) ──────────────────────────────
+// ── Intent classifier — zero tokens, pure regex ───────────────────────────────
 
 function classifyIntent(prompt) {
   const p = prompt.toLowerCase()
@@ -319,16 +315,11 @@ function getToolsForIntent(intent) {
     case 'tasks':    return [...TOOL_DEFS.tasks, ...TOOL_DEFS.memory]
     case 'memory':   return TOOL_DEFS.memory
     case 'search':   return TOOL_DEFS.search
-    // general gets everything — catch-all for ambiguous messages
-    default:         return [
-      ...TOOL_DEFS.tasks,
-      ...TOOL_DEFS.memory,
-      ...TOOL_DEFS.search,
-    ]
+    default:         return [...TOOL_DEFS.tasks, ...TOOL_DEFS.memory, ...TOOL_DEFS.search]
   }
 }
 
-// ── System prompt (trimmed — rules only, no examples) ────────────────────────
+// ── System prompt — rules only, no examples ───────────────────────────────────
 
 function buildSystemPrompt(liveContext, today, minimal = false) {
   if (minimal) {
@@ -396,22 +387,22 @@ async function executeTool(name, args, messageId) {
   try {
     log.tool(`${name} called`, args)
     switch (name) {
-      case 'upsert_memory_node':     return await upsertMemoryNode(args)
-      case 'find_conflicting_nodes': return await findConflictingNodes(args)
-      case 'get_memory_history':     return await getMemoryHistory(args)
-      case 'manage_journal':         return await manageJournal(args)
-      case 'log_transaction':        return await logTransaction(args, messageId)
-      case 'edit_transaction':       return await editTransaction(args)
-      case 'analyze_finances':       return await analyzeFinances(args)
-      case 'get_recent_transactions':return await getRecentTransactions(args)
-      case 'manage_task':            return await manageTask(args)
-      case 'manage_reminder':        return await manageReminder(args)
-      case 'manage_bill':            return await manageBill(args)
-      case 'manage_event':           return await manageEvent(args)
-      case 'manage_watchlist':       return await manageWatchlist(args)
-      case 'web_search':             return await webSearch(args)
-      case 'get_context':            return await getContext()
-      case 'sync_dashboard_memory':  return await syncDashboardMemory(args)
+      case 'upsert_memory_node':      return await upsertMemoryNode(args)
+      case 'find_conflicting_nodes':  return await findConflictingNodes(args)
+      case 'get_memory_history':      return await getMemoryHistory(args)
+      case 'manage_journal':          return await manageJournal(args)
+      case 'log_transaction':         return await logTransaction(args, messageId)
+      case 'edit_transaction':        return await editTransaction(args)
+      case 'analyze_finances':        return await analyzeFinances(args)
+      case 'get_recent_transactions': return await getRecentTransactions(args)
+      case 'manage_task':             return await manageTask(args)
+      case 'manage_reminder':         return await manageReminder(args)
+      case 'manage_bill':             return await manageBill(args)
+      case 'manage_event':            return await manageEvent(args)
+      case 'manage_watchlist':        return await manageWatchlist(args)
+      case 'web_search':              return await webSearch(args)
+      case 'get_context':             return await getContext()
+      case 'sync_dashboard_memory':   return await syncDashboardMemory(args)
       default:
         return { status: 'Failed', error: `Unknown tool: ${name}` }
     }
@@ -434,7 +425,48 @@ function isSimpleMessage(prompt) {
   return simple.some(r => r.test(prompt.trim()))
 }
 
-// ── Groq call ─────────────────────────────────────────────────────────────────
+// ── Gemini call — used for simple messages AND as Groq fallback ───────────────
+
+async function callGemini(messages, systemPrompt) {
+  const model = gemini.getGenerativeModel({
+    model: 'gemini-2.5-flash-lite',         // updated model string
+    systemInstruction: systemPrompt,
+  })
+
+  // Filter to user/assistant only — Gemini rejects system + tool messages
+  const conversational = messages.filter(
+    m => (m.role === 'user' || m.role === 'assistant') &&
+         typeof m.content === 'string' &&
+         m.content.trim().length > 0
+  )
+
+  // Gemini requires history to start with user role
+  while (conversational.length > 0 && conversational[0].role === 'assistant') {
+    conversational.shift()
+  }
+
+  const lastMessage = conversational[conversational.length - 1]
+  const priorMessages = conversational.slice(0, -1)
+
+  const geminiHistory = priorMessages.map(m => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }],
+  }))
+
+  try {
+    const chat = model.startChat({ history: geminiHistory })
+    const result = await chat.sendMessage(lastMessage?.content ?? '')
+    return result.response.text()
+  } catch {
+    // If history causes issues, bare call with no history
+    log.warn('Gemini with history failed, retrying bare')
+    const chat = model.startChat({ history: [] })
+    const result = await chat.sendMessage(lastMessage?.content ?? '')
+    return result.response.text()
+  }
+}
+
+// ── Groq call — throws immediately on error, no retry ────────────────────────
 
 async function callGroq(messages, tools = null) {
   const params = {
@@ -446,56 +478,7 @@ async function callGroq(messages, tools = null) {
     params.tools = tools
     params.tool_choice = 'auto'
   }
-
-  try {
-    return await groq.chat.completions.create(params)
-  } catch (error) {
-    throw error
-  }
-}
-
-// ── Gemini fallback (conversational only — no tools) ─────────────────────────
-
-async function callGemini(messages, systemPrompt) {
-  log.warn('Groq unavailable — falling back to Gemini')
-  const model = gemini.getGenerativeModel({
-    model: 'gemini-3.1-flash-lite',
-    systemInstruction: systemPrompt,
-  })
-
-  // Filter to only user/assistant messages (drop system + tool messages)
-  // Then ensure history alternates correctly starting with user
-  const conversational = messages
-    .filter(m => m.role === 'user' || m.role === 'assistant')
-    .filter(m => typeof m.content === 'string' && m.content.trim().length > 0)
-
-  // Gemini requires history to start with 'user' role
-  // Drop leading assistant messages if any
-  while (conversational.length > 0 && conversational[0].role === 'assistant') {
-    conversational.shift()
-  }
-
-  // Last message is what we send — history is everything before it
-  const lastMessage = conversational[conversational.length - 1]
-  const priorMessages = conversational.slice(0, -1)
-
-  // Build Gemini-format history (user → model alternating)
-  const geminiHistory = priorMessages.map(m => ({
-    role: m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }],
-  }))
-
-  try {
-    const chat = model.startChat({ history: geminiHistory })
-    const result = await chat.sendMessage(lastMessage?.content ?? '')
-    return result.response.text()
-  } catch (err) {
-    // If history still causes issues, try with no history at all
-    log.warn('Gemini with history failed, retrying bare')
-    const chat = model.startChat({ history: [] })
-    const result = await chat.sendMessage(lastMessage?.content ?? '')
-    return result.response.text()
-  }
+  return await groq.chat.completions.create(params)
 }
 
 // ── Main entry point ──────────────────────────────────────────────────────────
@@ -505,13 +488,15 @@ export async function generateResponse(prompt, messageId, sessionId = 'telegram-
     const today = new Date().toISOString().split('T')[0]
     const simple = isSimpleMessage(prompt)
     const intent = simple ? 'simple' : classifyIntent(prompt)
-    const liveContext = simple ? '' : await getCachedContext(prompt)
 
-    // Shorter history for action intents, longer for conversational
+    // History: short for simple/action intents, longer for conversational
     const historyLimit = simple ? 2 : (intent === 'general' ? 6 : 3)
     const history = await loadHistory(sessionId, historyLimit)
 
+    // Context: keyed by intent so finance messages get finance-relevant nodes
+    const liveContext = simple ? '' : await getCachedContext(prompt, intent)
     const systemPrompt = buildSystemPrompt(liveContext, today, simple)
+
     const messages = [
       { role: 'system', content: systemPrompt },
       ...history,
@@ -520,10 +505,23 @@ export async function generateResponse(prompt, messageId, sessionId = 'telegram-
 
     log.agent(`Session: ${sessionId} | Intent: ${intent} | "${prompt.slice(0, 50)}"`)
 
-    // ── Groq path ──
-    let groqFailed = false
+    // ── SIMPLE MESSAGES → Gemini directly (saves all Groq quota) ─────────────
+    if (simple) {
+      try {
+        const reply = await callGemini(messages, systemPrompt)
+        const cleaned = reply?.trim() || '.'
+        await saveHistory(sessionId, 'user', prompt)
+        await saveHistory(sessionId, 'assistant', cleaned)
+        return cleaned
+      } catch (geminiErr) {
+        log.warn('Gemini simple path failed, falling back to Groq:', geminiErr?.message)
+        // Fall through to Groq below
+      }
+    }
+
+    // ── TOOL INTENTS → Groq with filtered tool set ───────────────────────────
     try {
-      const selectedTools = simple ? null : getToolsForIntent(intent)
+      const selectedTools = getToolsForIntent(intent)
       const response = await callGroq(messages, selectedTools)
       const responseMessage = response.choices[0].message
 
@@ -557,43 +555,37 @@ export async function generateResponse(prompt, messageId, sessionId = 'telegram-
         return reply
       }
 
-      // Direct response path
+      // Direct response (no tools needed)
       const reply = responseMessage.content || '.'
       await saveHistory(sessionId, 'user', prompt)
       await saveHistory(sessionId, 'assistant', reply)
       return reply
 
     } catch (groqError) {
-      const isRateLimit = groqError?.status === 429
-      const isServerError = groqError?.status >= 500
-      groqFailed = isRateLimit || isServerError
-
-      if (!groqFailed) {
-        // Not a transient error — don't fallback, surface it
-        log.error('Groq non-retriable error', groqError?.message)
+      const isTransient = groqError?.status === 429 || groqError?.status >= 500
+      if (!isTransient) {
+        log.error('Groq non-retriable error:', groqError?.message)
         return 'Something went wrong on my end. Try again.'
       }
 
       log.warn(`Groq failed (${groqError?.status}) — trying Gemini`)
     }
 
-    // ── Gemini fallback path ──
-    if (groqFailed) {
-      try {
-        await new Promise(r => setTimeout(r, 500)) // brief pause
-        const reply = await callGemini(messages, systemPrompt)
-        const cleaned = reply?.trim() || 'Done.'
-        await saveHistory(sessionId, 'user', prompt)
-        await saveHistory(sessionId, 'assistant', `[via Gemini] ${cleaned}`)
-        return cleaned
-      } catch (geminiError) {
-        log.error('Gemini fallback also failed', geminiError?.message)
-        return 'Both services are temporarily unavailable. Try again in a moment.'
-      }
+    // ── GEMINI FALLBACK — for transient Groq failures ─────────────────────────
+    try {
+      await new Promise(r => setTimeout(r, 500))
+      const reply = await callGemini(messages, systemPrompt)
+      const cleaned = reply?.trim() || 'Done.'
+      await saveHistory(sessionId, 'user', prompt)
+      await saveHistory(sessionId, 'assistant', cleaned)
+      return cleaned
+    } catch (geminiError) {
+      log.error('Gemini fallback also failed:', geminiError?.message)
+      return 'Both services are temporarily unavailable. Try again in a moment.'
     }
 
   } catch (error) {
-    log.error('Agent error', error?.message ?? error)
+    log.error('Agent error:', error?.message ?? error)
     return 'Something went wrong on my end. Try again.'
   }
 }

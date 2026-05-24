@@ -72,6 +72,7 @@ async function start() {
     console.log(`[SYSTEM] Webhook → ${process.env.SERVER_DOMAIN}${WEBHOOK_PATH}`);
     startMorningBriefing(bot); // ← after everything is ready
     startReminderChecker(bot)
+    startCleanup()
   } else {
     bot.launch();
     console.log(`[SYSTEM] Polling started.`);
