@@ -65,7 +65,8 @@ export async function initializeDatabase() {
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
             remind_at TEXT DEFAULT '',
-            done INTEGER DEFAULT 0
+            done INTEGER DEFAULT 0,
+            fired_at TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS bills (

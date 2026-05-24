@@ -41,13 +41,28 @@ export async function manageReminder({ action, title, remind_at, keyword }) {
   try {
     switch (action) {
       case 'create': {
-        const id = uuidv4();
-        await db.execute({
-          sql: `INSERT INTO reminders (id, title, remind_at, done) VALUES (?, ?, ?, 0)`,
-          args: [id, title, remind_at || '']
-        });
-        return { status: 'Success', details: `Reminder set: ${title}` };
+      const isoTime = args.remind_at;
+
+      // Strict validation: ISO 8601 with time and optional timezone
+      const isoRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}([+-]\d{2}:\d{2}|Z)?$/;
+      if (!isoTime || !isoRegex.test(isoTime)) {
+        return {
+          status: 'Error',
+          details: `Invalid time format. Expected ISO 8601 like 2026-05-24T15:10:00+05:30. Got: "${isoTime}"`
+        };
       }
+
+      const id = uuidv4();
+      await db.execute({
+        sql: `INSERT INTO reminders (id, title, remind_at, done) VALUES (?, ?, ?, 0)`,
+        args: [id, title, isoTime]
+      });
+
+      return {
+        status: 'Success',
+        details: `Reminder set: ${title} at ${isoTime}`
+      };
+    }
       case 'complete': {
         await db.execute({
           sql: `UPDATE reminders SET done = 1 WHERE title LIKE ?`,

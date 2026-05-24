@@ -78,6 +78,7 @@ async function start() {
     console.log(`[SYSTEM] Polling started.`);
     startMorningBriefing(bot); // ← works in dev too for testing
     startReminderChecker(bot);
+    startCleanup()
   }
 }
 
