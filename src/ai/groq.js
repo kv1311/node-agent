@@ -341,6 +341,9 @@ function classifyIntent(prompt) {
   
   // Search
   if (/search|look up|latest|news|current|today.*weather|price of/i.test(p)) return 'search';
+
+  // ADD THIS ↓
+  if (/tell me about|who (is|was)|what (is|was)|explain|describe/i.test(p)) return 'search'
   
   return 'general';
 }
@@ -479,6 +482,7 @@ async function callGemini(messages, systemPrompt) {
   const model = gemini.getGenerativeModel({
     model: 'gemini-2.5-flash-lite',         // updated model string
     systemInstruction: systemPrompt,
+    tools: [{ googleSearch: {} }],  
   })
 
   // Filter to user/assistant only — Gemini rejects system + tool messages
@@ -525,6 +529,7 @@ async function callGroq(messages, tools = null) {
   if (tools) {
     params.tools = tools
     params.tool_choice = 'auto'
+    params.response_format = { type: 'text' }  
   }
   return await groq.chat.completions.create(params)
 }
@@ -532,10 +537,7 @@ async function callGroq(messages, tools = null) {
 function needsBackground(prompt, intent) {
   // Tasks that can wait (e.g., long analysis, syncs, weekly reports)
   const backgroundIntents = ['finance_sync', 'weekly_report', 'memory_enrichment'];
-  if (backgroundIntents.includes(intent)) return true;
-  // Long prompts that might be batch work
-  if (prompt.length > 800 && intent === 'general') return true;
-  return false;
+  return backgroundIntents.includes(intent);
 }
 
 // Simple in-memory storage for delayed replies (or use DB)
@@ -666,7 +668,7 @@ if (markMatch) {
     // ── SIMPLE MESSAGES → Gemini (fast, cheap) ────────────────────────
     if (simple) {
       try {
-        log.warn(`Groq failed, now trying Gemini fallback`);
+        log.warn(`Calling Gemini for simple message in session ${sessionId}`);
         const reply = await callGemini(messages, systemPrompt);
         const cleaned = reply?.trim() || '.';
         await saveHistory(sessionId, 'user', prompt);
@@ -677,6 +679,8 @@ if (markMatch) {
       }
     }
 
+
+    
     // ── TOOL INTENTS or fallback from Nemotron → Groq ─────────────────
     try {
       const selectedTools = getToolsForIntent(intent);
@@ -708,7 +712,21 @@ if (markMatch) {
         return reply;
       }
 
-      const reply = responseMessage.content || '.';
+      let reply = responseMessage.content || '.'
+
+      if (reply.trim().startsWith('{') && reply.includes('"function"')) {
+        const rephrase = await groq.chat.completions.create({
+          model: 'llama-3.1-8b-instant',
+          messages: [
+            { role: 'system', content: buildSystemPrompt('', today, true) },
+            { role: 'user', content: prompt },
+            { role: 'assistant', content: 'I need to process this request.' },
+            { role: 'user', content: 'Please respond in plain conversational text only. No JSON.' }
+          ],
+          max_tokens: 256,
+        })
+        reply = rephrase.choices[0].message.content || '.'
+      }
       await saveHistory(sessionId, 'user', prompt);
       await saveHistory(sessionId, 'assistant', reply);
       return reply;
