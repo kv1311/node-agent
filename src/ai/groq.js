@@ -358,8 +358,7 @@ function getToolsForIntent(intent) {
 
 // ── System prompt — rules only, no examples ───────────────────────────────────
 
-function buildSystemPrompt(liveContext, today, minimal = false) {
-  // Compute server timezone offset (e.g., "+05:30" for Asia/Kolkata)
+function buildSystemPrompt(liveContext, today, minimal = false, intent = 'general') {
   const now = new Date();
   const offsetMinutes = -now.getTimezoneOffset();
   const offsetHours = Math.floor(Math.abs(offsetMinutes) / 60);
@@ -367,18 +366,36 @@ function buildSystemPrompt(liveContext, today, minimal = false) {
   const offsetSign = offsetMinutes >= 0 ? '+' : '-';
   const userTimezone = `${offsetSign}${String(offsetHours).padStart(2, '0')}:${String(offsetMins).padStart(2, '0')}`;
   
-  // Compute tomorrow's date in YYYY-MM-DD
   const tomorrowDate = new Date(now);
   tomorrowDate.setDate(now.getDate() + 1);
   const tomorrow = tomorrowDate.toISOString().split('T')[0];
+  
+  // TOOL-ORIENTED PROMPT (for tasks, finance, memory, journal)
+  if (!minimal && (intent === 'tasks' || intent === 'finance' || intent === 'memory' || intent === 'journal')) {
+    const toolNames = getToolsForIntent(intent).map(t => t.function.name).join(', ');
+    return `You are Sia, a tool‑oriented agent. Today is ${today}.
+    
+You MUST respond with a valid JSON tool call when appropriate.
+Do NOT use XML tags like <function=...>.
+Do NOT add explanatory text before or after the JSON.
 
+Example tool call:
+{"name": "manage_task", "parameters": {"action": "complete", "title": "Drink water"}}
+
+Available tools: ${toolNames}
+
+Respond only with JSON or plain text if no tool is needed.`;
+  }
+
+  // MINIMAL PROMPT (for simple messages)
   if (minimal) {
     return `You are Sia, kv's personal agent. Today is ${today}.
 Be conversational and engaged. Answer naturally.
 When confirming actions, be specific about what you did — don't just say "Logged" or "Done".
-${liveContext ? `\nCONTEXT:\n${liveContext}` : ''}`
+${liveContext ? `\nCONTEXT:\n${liveContext}` : ''}`;
   }
 
+  // DEFAULT CONVERSATIONAL PROMPT
   return `You are Sia. A personal agent for kv. Not an assistant.
 
 ## CHARACTER & TONE
@@ -393,6 +410,12 @@ INTELLECT: Planning, thinking, patterns. Sharp and curious.
 
 GUARDIAN: Stress, reflection, late night. Warm and present.
 "That sounds important. I'll remind you."
+
+## TOOL CALLING FORMAT (CRITICAL)
+- When you need to call a tool, you MUST output a valid JSON object with "name" and "parameters".
+- Example: {"name": "manage_task", "parameters": {"action": "complete", "title": "Drink water"}}
+- Do NOT use XML tags like <function=...>. Do NOT add extra text before or after the JSON.
+- If no tool is needed, respond in plain text naturally.
 
 ## OUTPUT RULES
 - ALWAYS be specific when confirming actions.
@@ -436,7 +459,7 @@ REMINDER TIME FORMAT:
 
 Today is ${today}.
 
-${liveContext}`
+${liveContext}`;
 }
 
 // ── History ───────────────────────────────────────────────────────────────────
@@ -618,7 +641,7 @@ export async function generateResponse(prompt, messageId, sessionId = 'telegram-
       const historyLimit = 3; // shorter history for background
       const history = await loadHistory(sessionId, historyLimit);
       const liveContext = await getCachedContext(prompt, intent);
-      const systemPromptBg = buildSystemPrompt(liveContext, today, false);
+      const systemPromptBg = buildSystemPrompt(liveContext, today, false,intent);
       const messagesBg = [
         { role: 'system', content: systemPromptBg },
         ...history,
@@ -642,7 +665,7 @@ export async function generateResponse(prompt, messageId, sessionId = 'telegram-
     const historyLimit = simple ? 2 : (intent === 'general' ? 6 : 3);
     const history = await loadHistory(sessionId, historyLimit);
     const liveContext = simple ? '' : await getCachedContext(prompt, intent);
-    const systemPrompt = buildSystemPrompt(liveContext, today, simple);
+    const systemPrompt = buildSystemPrompt(liveContext, today, simple, intent);
 
     const messages = [
       { role: 'system', content: systemPrompt },
@@ -655,6 +678,7 @@ export async function generateResponse(prompt, messageId, sessionId = 'telegram-
     // ── SIMPLE MESSAGES → Gemini (fast, cheap) ────────────────────────
     if (simple) {
       try {
+        log.warn(`Groq failed, now trying Gemini fallback`);
         const reply = await callGemini(messages, systemPrompt);
         const cleaned = reply?.trim() || '.';
         await saveHistory(sessionId, 'user', prompt);
@@ -731,6 +755,7 @@ export async function generateResponse(prompt, messageId, sessionId = 'telegram-
     // ── FINAL FALLBACK: Gemini ────────────────────────────────────────
     try {
       await new Promise(r => setTimeout(r, 500));
+      console.log(`[FALLBACK] Calling Gemini for session ${sessionId}`);
       const reply = await callGemini(messages, systemPrompt);
       const cleaned = reply?.trim() || 'Done.';
       await saveHistory(sessionId, 'user', prompt);
