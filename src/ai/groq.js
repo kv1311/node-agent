@@ -12,6 +12,32 @@ import { webSearch } from '../tools/search.js'
 import { log } from '../utils/log.js'
 import { manageJournal } from '../tools/journal.js'
 
+// Simple in-memory queue and reply storage
+const jobQueue = [];
+let processing = false;
+const pendingReplies = new Map();
+
+function enqueue(name, fn) {
+  jobQueue.push({ name, fn });
+  if (!processing) processQueue();
+}
+
+async function processQueue() {
+  if (processing) return;
+  processing = true;
+  while (jobQueue.length) {
+    const job = jobQueue.shift();
+    try {
+      log.info(`[QUEUE] Running ${job.name}`);
+      await job.fn();
+      await new Promise(r => setTimeout(r, 500));
+    } catch (err) {
+      log.error(`[QUEUE] ${job.name} failed:`, err.message);
+    }
+  }
+  processing = false;
+}
+
 // ── Clients ───────────────────────────────────────────────────────────────────
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
@@ -692,13 +718,15 @@ export async function generateResponse(prompt, messageId, sessionId = 'telegram-
       return reply;
 
     } catch (groqError) {
-      const isTransient = groqError?.status === 429 || groqError?.status >= 500;
-      if (!isTransient) {
-        log.error('Groq non-retriable error:', groqError?.message);
-        return 'Something went wrong on my end. Try again.';
-      }
-      log.warn(`Groq failed (${groqError?.status}) — trying Gemini`);
-    }
+  const isTransient = groqError?.status === 429 || groqError?.status >= 500;
+  const isToolFailure = groqError?.message?.includes('tool_use_failed');
+  if (!isTransient && !isToolFailure) {
+    log.error('Groq non-retriable error:', groqError?.message);
+    return 'Something went wrong on my end. Try again.';
+  }
+  log.warn(`Groq failed (${groqError?.status}) — trying Gemini`);
+  // Then proceed to Gemini fallback
+}
 
     // ── FINAL FALLBACK: Gemini ────────────────────────────────────────
     try {
