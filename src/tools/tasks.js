@@ -41,7 +41,7 @@ export async function manageReminder({ action, title, remind_at, keyword }) {
   try {
     switch (action) {
       case 'create': {
-      const isoTime = args.remind_at;
+      const isoTime = remind_at;
 
       // Strict validation: ISO 8601 with time and optional timezone
       const isoRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}([+-]\d{2}:\d{2}|Z)?$/;

@@ -521,7 +521,7 @@ async function callGemini(messages, systemPrompt) {
 
 async function callGroq(messages, tools = null) {
   const params = {
-    model: 'llama-3.1-8b-instant',
+    model: tools ? 'llama-3.3-70b-versatile' : 'llama-3.1-8b-instant',
     messages,
     max_tokens: tools ? 1024 : 512,
   }
