@@ -322,6 +322,19 @@ function getToolsForIntent(intent) {
 // ── System prompt — rules only, no examples ───────────────────────────────────
 
 function buildSystemPrompt(liveContext, today, minimal = false) {
+  // Compute server timezone offset (e.g., "+05:30" for Asia/Kolkata)
+  const now = new Date();
+  const offsetMinutes = -now.getTimezoneOffset();
+  const offsetHours = Math.floor(Math.abs(offsetMinutes) / 60);
+  const offsetMins = Math.abs(offsetMinutes) % 60;
+  const offsetSign = offsetMinutes >= 0 ? '+' : '-';
+  const userTimezone = `${offsetSign}${String(offsetHours).padStart(2, '0')}:${String(offsetMins).padStart(2, '0')}`;
+  
+  // Compute tomorrow's date in YYYY-MM-DD
+  const tomorrowDate = new Date(now);
+  tomorrowDate.setDate(now.getDate() + 1);
+  const tomorrow = tomorrowDate.toISOString().split('T')[0];
+
   if (minimal) {
     return `You are Sia, kv's personal agent. Today is ${today}.
 Be conversational and engaged. Answer naturally.
@@ -380,8 +393,8 @@ GUARDIAN: Stress, reflection, late night. Warm and present.
 REMINDER TIME FORMAT:
 - Always convert reminder times to ISO 8601 with timezone: YYYY-MM-DDTHH:MM:00±HH:MM
 - Today is ${today}, user timezone is ${userTimezone}.
-- "3:10 PM today" → "${today}T15:10:00${offset}"
-- "tomorrow 9 AM" → "${tomorrow}T09:00:00${offset}"
+- "3:10 PM today" → "${today}T15:10:00${userTimezone}"
+- "tomorrow 9 AM" → "${tomorrow}T09:00:00${userTimezone}"
 - Never store natural language times. The tool expects a valid ISO 8601 string.
 
 Today is ${today}.
