@@ -308,15 +308,6 @@ function classifyIntent(prompt) {
   return 'general'
 }
 
-function needsBackground(prompt, intent) {
-  // Tasks that can wait 5-10 seconds
-  const backgroundIntents = ['finance_sync', 'memory_enrichment', 'weekly_report'];
-  if (backgroundIntents.includes(intent)) return true;
-  // Long prompts or obvious batch work
-  if (prompt.length > 500 && intent === 'general') return true;
-  return false;
-}
-
 function getToolsForIntent(intent) {
   switch (intent) {
     case 'journal':  return TOOL_DEFS.journal
@@ -562,6 +553,7 @@ async function callOpenRouterFree(messages, systemPrompt) {
   const data = await response.json();
   return data.choices[0].message.content;
 }
+
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 export async function generateResponse(prompt, messageId, sessionId = 'telegram-default') {
