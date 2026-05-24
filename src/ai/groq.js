@@ -635,6 +635,46 @@ export async function generateResponse(prompt, messageId, sessionId = 'telegram-
     const simple = isSimpleMessage(prompt);
     const intent = simple ? 'simple' : classifyIntent(prompt);
 
+
+    // ── Optimized "Mark as Done" Shortcut ────────────────────────────────────────
+// Captures variations like: mark 'buy milk' as done, complete buy milk, tick gym, check off laundry
+const markMatch = prompt.match(/^(?:mark\s+['"]?(.+?)['"]?\s+as\s+done|complete\s+['"]?(.+?)['"]?|tick\s+['"]?(.+?)['"]?|check\s+off\s+['"]?(.+?)['"]?)$/i);
+
+if (markMatch) {
+  // Extract whichever capture group caught the title string
+  const title = (markMatch[1] || markMatch[2] || markMatch[3] || markMatch[4])?.trim();
+  let updated = false;
+
+  if (title) {
+    // Try updating tasks table first
+    let result = await db.execute({
+      sql: `UPDATE tasks SET done = 1 WHERE title LIKE ? AND done = 0`,
+      args: [`%${title}%`]
+    });
+    
+    // Check both standard wrapper property variations for affected rows
+    if ((result.rowsAffected ?? result.affectedRows ?? 0) > 0) {
+      updated = true;
+    }
+
+    // If no task matched, try updating reminders table
+    if (!updated) {
+      result = await db.execute({
+        sql: `UPDATE reminders SET done = 1 WHERE title LIKE ? AND done = 0`,
+        args: [`%${title}%`]
+      });
+      if ((result.rowsAffected ?? result.affectedRows ?? 0) > 0) {
+        updated = true;
+      }
+    }
+
+    const reply = updated ? `✓ Marked "${title}" as done.` : `No pending task or reminder matched "${title}".`;
+    await saveHistory(sessionId, 'user', prompt);
+    await saveHistory(sessionId, 'assistant', reply);
+    return reply;
+  }
+}
+    
     // ── BACKGROUND PATH: for slow, non-interactive tasks ──────────────
     if (!simple && needsBackground(prompt, intent)) {
       // We need messages and systemPrompt – build them first
