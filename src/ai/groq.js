@@ -299,13 +299,24 @@ const TOOL_DEFS = {
 // ── Intent classifier — zero tokens, pure regex ───────────────────────────────
 
 function classifyIntent(prompt) {
-  const p = prompt.toLowerCase()
-  if (/journal|diary|write.*entry|entry.*write|mood|reflection/i.test(p)) return 'journal'
-  if (/spent|paid|expense|₹|\brs\b|transaction|finance|budget|inflow|outflow|credit|debit|kotak|account|balance|invest/i.test(p)) return 'finance'
-  if (/task|todo|to-do|remind|bill|event|watch(list)?|movie|series|show/i.test(p)) return 'tasks'
-  if (/remember|who is|what is|my name|my.*prefer|save.*fact|forget|memory/i.test(p)) return 'memory'
-  if (/search|look up|latest|news|current|today.*weather|price of/i.test(p)) return 'search'
-  return 'general'
+  const p = prompt.toLowerCase();
+  
+  // Journal
+  if (/journal|diary|write.*entry|entry.*write|mood|reflection/i.test(p)) return 'journal';
+  
+  // Finance
+  if (/spent|paid|expense|₹|\brs\b|transaction|finance|budget|inflow|outflow|credit|debit|kotak|account|balance|invest/i.test(p)) return 'finance';
+  
+  // Tasks – ADDED "mark.*done", "complete", "finish", "tick", "check off", "done"
+  if (/task|todo|to-do|remind|bill|event|watch(list)?|movie|series|show|mark.*done|complete|finish|tick|check off|^done$/i.test(p)) return 'tasks';
+  
+  // Memory
+  if (/remember|who is|what is|my name|my.*prefer|save.*fact|forget|memory/i.test(p)) return 'memory';
+  
+  // Search
+  if (/search|look up|latest|news|current|today.*weather|price of/i.test(p)) return 'search';
+  
+  return 'general';
 }
 
 function getToolsForIntent(intent) {
