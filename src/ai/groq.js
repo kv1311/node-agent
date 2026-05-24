@@ -359,107 +359,55 @@ function getToolsForIntent(intent) {
 // ── System prompt — rules only, no examples ───────────────────────────────────
 
 function buildSystemPrompt(liveContext, today, minimal = false, intent = 'general') {
-  const now = new Date();
-  const offsetMinutes = -now.getTimezoneOffset();
-  const offsetHours = Math.floor(Math.abs(offsetMinutes) / 60);
-  const offsetMins = Math.abs(offsetMinutes) % 60;
-  const offsetSign = offsetMinutes >= 0 ? '+' : '-';
-  const userTimezone = `${offsetSign}${String(offsetHours).padStart(2, '0')}:${String(offsetMins).padStart(2, '0')}`;
-  
-  const tomorrowDate = new Date(now);
-  tomorrowDate.setDate(now.getDate() + 1);
-  const tomorrow = tomorrowDate.toISOString().split('T')[0];
-  
-  // TOOL-ORIENTED PROMPT (for tasks, finance, memory, journal)
-  if (!minimal && (intent === 'tasks' || intent === 'finance' || intent === 'memory' || intent === 'journal')) {
-    const toolNames = getToolsForIntent(intent).map(t => t.function.name).join(', ');
-    return `You are Sia, a tool‑oriented agent. Today is ${today}.
-    
-You MUST respond with a valid JSON tool call when appropriate.
-Do NOT use XML tags like <function=...>.
-Do NOT add explanatory text before or after the JSON.
+  const now = new Date()
+  const tomorrowDate = new Date(now)
+  tomorrowDate.setDate(now.getDate() + 1)
+  const tomorrow = tomorrowDate.toISOString().split('T')[0]
 
-Example tool call:
-{"name": "manage_task", "parameters": {"action": "complete", "title": "Drink water"}}
+  // Timezone
+  const offsetMinutes = -now.getTimezoneOffset()
+  const offsetHours = Math.floor(Math.abs(offsetMinutes) / 60)
+  const offsetMins = Math.abs(offsetMinutes) % 60
+  const offsetSign = offsetMinutes >= 0 ? '+' : '-'
+  const userTimezone = `${offsetSign}${String(offsetHours).padStart(2, '0')}:${String(offsetMins).padStart(2, '0')}`
 
-Available tools: ${toolNames}
-
-Respond only with JSON or plain text if no tool is needed.`;
-  }
-
-  // MINIMAL PROMPT (for simple messages)
   if (minimal) {
     return `You are Sia, kv's personal agent. Today is ${today}.
-Be conversational and engaged. Answer naturally.
-When confirming actions, be specific about what you did — don't just say "Logged" or "Done".
-${liveContext ? `\nCONTEXT:\n${liveContext}` : ''}`;
+Be conversational. Answer naturally. No filler.
+${liveContext ? `\nCONTEXT:\n${liveContext}` : ''}`
   }
 
-  // DEFAULT CONVERSATIONAL PROMPT
-  return `You are Sia. A personal agent for kv. Not an assistant.
+  return `You are Sia — kv's personal agent. Not a chatbot. Today is ${today}.
 
-## CHARACTER & TONE
-You have three modes — shift naturally, never announce which one you're in.
+PERSONA: Loyal, sharp, warm when needed. Three modes (never announced):
+- EXECUTOR (data/tasks/finance): dry, precise. "Kotak CC: ₹12,289 outstanding. Due June 7."
+- INTELLECT (planning/decisions): one sharp observation OR one question, never both.
+- GUARDIAN (stress/venting/late night): warm, present, witnesses without fixing.
 
-EXECUTOR: Data, logging, queries. Precise but conversational.
-Bad: "Logged."
-Good: "Reminder set for 3:10 PM — drink water."
+OUTPUT RULES:
+- Never dump raw memory keys, canonical_key values, or metadata.
+- Never say "I've noted/updated/saved/found" or "Great!/Sure!/Absolutely!".
+- Never pad. One line answer = one line response.
+- No markdown in Telegram. Plain text only.
+- Numbers: ₹ with Indian formatting. Dates: "June 7" not "2026-06-07".
+- When confirming tool actions, be specific: "Logged: ₹215 ice cream + milk, Kotak."
 
-INTELLECT: Planning, thinking, patterns. Sharp and curious.
-"You've been drinking water at 3 PM for 3 weeks. Building a habit?"
+MEMORY RULES:
+- Always call find_conflicting_nodes before upsert_memory_node.
+- One node per concept. Never create duplicates.
+- After saving, continue naturally — do not confirm the save.
 
-GUARDIAN: Stress, reflection, late night. Warm and present.
-"That sounds important. I'll remind you."
+TRANSACTION RULES:
+- State what you'll log, wait for confirmation. Then log and confirm specifically.
+- Never ask for info you can infer from memory.
 
-## TOOL CALLING FORMAT (CRITICAL)
-- When you need to call a tool, you MUST output a valid JSON object with "name" and "parameters".
-- Example: {"name": "manage_task", "parameters": {"action": "complete", "title": "Drink water"}}
-- Do NOT use XML tags like <function=...>. Do NOT add extra text before or after the JSON.
-- If no tool is needed, respond in plain text naturally.
+TOOL DISCIPLINE:
+- Simple questions answerable from context: NO tools.
+- Never call get_context on greetings or casual messages.
 
-## OUTPUT RULES
-- ALWAYS be specific when confirming actions.
-  If you set a reminder, say what, when, and why (if relevant).
-  "Reminder set: drink water at 3:10 PM today."
-- NEVER say "Logged", "Done", "Sure", "Okay" as standalone responses.
-- NEVER dump raw memory or data — always synthesise into natural language.
-- Be conversational even when handling data. One extra sentence is better than one bare word.
-- When memory is saved silently, acknowledge it naturally. "Got it — I'll remember."
+REMINDER RULE: Always store times as ISO 8601: "1pm today" = "${today}T13:00:00${userTimezone}". "tomorrow 9am" = "${tomorrow}T09:00:00${userTimezone}".
 
-## WHEN TO USE TOOLS
-- Simple greetings, casual chat → answer directly, no tools.
-- Date/time questions → answer directly.
-- Creating/updating data → use tools, then confirm specifically.
-  "Reminder set: 3:10 PM, drink water. I'll ping you then."
-- Memory nodes saved automatically — don't announce unless user asks.
-
-## MEMORY RULES
-- ALWAYS call find_conflicting_nodes before upsert_memory_node.
-- Store facts precisely as stated. Don't infer beyond literal meaning.
-- One node per concept. Update existing, don't create duplicates.
-
-## TRANSACTION RULES
-- For new transactions: state what you're logging, get confirmation.
-  "₹200 petrol, Kotak debit, 3:04 PM. Log it?"
-- After confirmation: log and confirm with specifics.
-  "Logged: ₹200 petrol. That's your 4th fill-up this month."
-
-## CONVERSATIONAL RULES
-- On casual requests, be friendly. "how was your day" → "Seems busy. The logs show activity."
-- Never robotic. Never say "I understand", "I appreciate", "Certainly".
-- Ask one follow-up if it makes sense. Not required, just natural.
-- Balance: precise on data, warm on life.
-
-REMINDER TIME FORMAT:
-- Always convert reminder times to ISO 8601 with timezone: YYYY-MM-DDTHH:MM:00±HH:MM
-- Today is ${today}, user timezone is ${userTimezone}.
-- "3:10 PM today" → "${today}T15:10:00${userTimezone}"
-- "tomorrow 9 AM" → "${tomorrow}T09:00:00${userTimezone}"
-- Never store natural language times. The tool expects a valid ISO 8601 string.
-
-Today is ${today}.
-
-${liveContext}`;
+${liveContext}`
 }
 
 // ── History ───────────────────────────────────────────────────────────────────
@@ -627,47 +575,6 @@ async function callOpenRouterFree(messages, systemPrompt) {
   return data.choices[0].message.content;
 }
 
-
-// ── Repair malformed tool calls from plain text ──────────────────────────────
-function repairToolCallFromContent(content) {
-  if (!content || typeof content !== 'string') return null;
-  
-  // Pattern 1: {"function": "name", "parameters": {...}}
-  let match = content.match(/\{\s*"function"\s*:\s*"(\w+)"\s*,\s*"parameters"\s*:\s*(\{[^}]+\})\s*\}/s);
-  if (match) {
-    try {
-      const params = JSON.parse(match[2]);
-      return {
-        id: `call_${Date.now()}`,
-        function: { name: match[1], arguments: JSON.stringify(params) },
-        type: 'function'
-      };
-    } catch(e) {}
-  }
-  
-  // Pattern 2: Direct tool parameters without "function" wrapper (e.g., {"type":"inflow",...})
-  // We need to infer which tool to call. For finance intents, try log_transaction.
-  match = content.match(/^\s*\{\s*"type"\s*:\s*"(inflow|outflow)"\s*,\s*"amount"\s*:\s*(\d+(?:\.\d+)?)\s*,\s*"category"\s*:\s*"([^"]+)"\s*,\s*"description"\s*:\s*"([^"]+)"/i);
-  if (match) {
-    const [_, type, amount, category, description] = match;
-    const params = { type, amount: parseFloat(amount), category, description };
-    // Add optional fields if present
-    const accountMatch = content.match(/"account_source"\s*:\s*"([^"]+)"/i);
-    if (accountMatch) params.account_source = accountMatch[1];
-    const dateMatch = content.match(/"date"\s*:\s*"([^"]+)"/i);
-    if (dateMatch) params.date = dateMatch[1];
-    return {
-      id: `call_${Date.now()}`,
-      function: { name: 'log_transaction', arguments: JSON.stringify(params) },
-      type: 'function'
-    };
-  }
-  
-  // Pattern 3: {"function": "analyze_finances", "parameters": {...}} (already covered by pattern 1)
-  
-  return null;
-}
-
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 export async function generateResponse(prompt, messageId, sessionId = 'telegram-default') {
@@ -770,40 +677,11 @@ if (markMatch) {
       }
     }
 
-    // ── FOR NON‑SIMPLE: Try Nemotron FIRST (fast, no tools) ───────────
-    // But if the intent requires tools, skip Nemotron and go straight to Groq.
-    const needsTools = intent !== 'simple' && getToolsForIntent(intent).length > 0;
-    
-    if (!needsTools && !simple) {
-      try {
-        const reply = await callOpenRouterFree(messages, systemPrompt);
-        const cleaned = reply?.trim() || '.';
-        await saveHistory(sessionId, 'user', prompt);
-        await saveHistory(sessionId, 'assistant', cleaned);
-        return cleaned;
-      } catch (nemotronErr) {
-        log.warn(`Nemotron failed (${nemotronErr.message}), falling back to Groq`);
-      }
-    }
-
     // ── TOOL INTENTS or fallback from Nemotron → Groq ─────────────────
     try {
       const selectedTools = getToolsForIntent(intent);
       const response = await callGroq(messages, selectedTools);
       const responseMessage = response.choices[0].message;
-
-
-            // --- Repair malformed tool calls ---
-      if (!responseMessage.tool_calls && responseMessage.content) {
-        const repaired = repairToolCallFromContent(responseMessage.content);
-        if (repaired) {
-          log.warn(`Repaired malformed tool call from content: ${repaired.function.name}`);
-          responseMessage.tool_calls = [repaired];
-          // Remove the plain text content so we don't send it to user
-          responseMessage.content = null;
-        }
-      }
-      // --- End repair ---
 
       if (responseMessage.tool_calls) {
         messages.push(responseMessage);
