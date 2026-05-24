@@ -570,7 +570,7 @@ async function callGemini(messages, systemPrompt) {
 
 async function callGroq(messages, tools = null) {
   const params = {
-    model: tools ? 'llama-3.3-70b-versatile' : 'llama-3.1-8b-instant',
+    model: tools ? 'qwen-2.5-72b' : 'llama-3.1-8b-instant',
     messages,
     max_tokens: tools ? 1024 : 512,
   }
@@ -625,6 +625,47 @@ async function callOpenRouterFree(messages, systemPrompt) {
   }
   const data = await response.json();
   return data.choices[0].message.content;
+}
+
+
+// ── Repair malformed tool calls from plain text ──────────────────────────────
+function repairToolCallFromContent(content) {
+  if (!content || typeof content !== 'string') return null;
+  
+  // Pattern 1: {"function": "name", "parameters": {...}}
+  let match = content.match(/\{\s*"function"\s*:\s*"(\w+)"\s*,\s*"parameters"\s*:\s*(\{[^}]+\})\s*\}/s);
+  if (match) {
+    try {
+      const params = JSON.parse(match[2]);
+      return {
+        id: `call_${Date.now()}`,
+        function: { name: match[1], arguments: JSON.stringify(params) },
+        type: 'function'
+      };
+    } catch(e) {}
+  }
+  
+  // Pattern 2: Direct tool parameters without "function" wrapper (e.g., {"type":"inflow",...})
+  // We need to infer which tool to call. For finance intents, try log_transaction.
+  match = content.match(/^\s*\{\s*"type"\s*:\s*"(inflow|outflow)"\s*,\s*"amount"\s*:\s*(\d+(?:\.\d+)?)\s*,\s*"category"\s*:\s*"([^"]+)"\s*,\s*"description"\s*:\s*"([^"]+)"/i);
+  if (match) {
+    const [_, type, amount, category, description] = match;
+    const params = { type, amount: parseFloat(amount), category, description };
+    // Add optional fields if present
+    const accountMatch = content.match(/"account_source"\s*:\s*"([^"]+)"/i);
+    if (accountMatch) params.account_source = accountMatch[1];
+    const dateMatch = content.match(/"date"\s*:\s*"([^"]+)"/i);
+    if (dateMatch) params.date = dateMatch[1];
+    return {
+      id: `call_${Date.now()}`,
+      function: { name: 'log_transaction', arguments: JSON.stringify(params) },
+      type: 'function'
+    };
+  }
+  
+  // Pattern 3: {"function": "analyze_finances", "parameters": {...}} (already covered by pattern 1)
+  
+  return null;
 }
 
 // ── Main entry point ──────────────────────────────────────────────────────────
@@ -750,6 +791,19 @@ if (markMatch) {
       const selectedTools = getToolsForIntent(intent);
       const response = await callGroq(messages, selectedTools);
       const responseMessage = response.choices[0].message;
+
+
+            // --- Repair malformed tool calls ---
+      if (!responseMessage.tool_calls && responseMessage.content) {
+        const repaired = repairToolCallFromContent(responseMessage.content);
+        if (repaired) {
+          log.warn(`Repaired malformed tool call from content: ${repaired.function.name}`);
+          responseMessage.tool_calls = [repaired];
+          // Remove the plain text content so we don't send it to user
+          responseMessage.content = null;
+        }
+      }
+      // --- End repair ---
 
       if (responseMessage.tool_calls) {
         messages.push(responseMessage);
