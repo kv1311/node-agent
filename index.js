@@ -8,6 +8,7 @@ import { startMorningBriefing } from './src/cron/morning.js';
 import { initializeDatabase } from './src/config/database.js';
 import { getBot, initializeBot } from './src/bot/telegram.js';
 import { startReminderChecker } from './src/cron/reminders.js'
+import { startCleanup } from './src/cron/cleanup.js'
 
 import taskRoutes     from './src/routes/tasks.routes.js';
 import financeRoutes  from './src/routes/finance.routes.js';
