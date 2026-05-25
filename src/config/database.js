@@ -115,6 +115,80 @@ export async function initializeDatabase() {
 
         CREATE INDEX IF NOT EXISTS idx_conversations_session 
         ON conversations(session_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS obligations (
+        id TEXT PRIMARY KEY,
+        from_party TEXT NOT NULL,
+        to_party TEXT NOT NULL,
+        total_amount REAL NOT NULL,
+        paid_total REAL DEFAULT 0,
+        remaining REAL NOT NULL,
+        currency TEXT DEFAULT 'INR',
+        due_date TEXT,
+        installments INTEGER DEFAULT 1,
+        purpose TEXT,
+        status TEXT DEFAULT 'active',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_payment_date TEXT,
+        metadata TEXT DEFAULT '{}'
+        );
+
+        CREATE TABLE IF NOT EXISTS obligation_settlements (
+        id TEXT PRIMARY KEY,
+        obligation_id TEXT NOT NULL,
+        amount_paid REAL NOT NULL,
+        payment_date TEXT NOT NULL,
+        from_account TEXT DEFAULT 'unknown',
+        notes TEXT DEFAULT '',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(obligation_id) REFERENCES obligations(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_obligations_party 
+        ON obligations(from_party, to_party, status);
+
+        CREATE INDEX IF NOT EXISTS idx_obligations_status 
+        ON obligations(status);
+
+        CREATE INDEX IF NOT EXISTS idx_obligations_due
+        ON obligations(due_date, status);
+
+        CREATE INDEX IF NOT EXISTS idx_settlements_obligation
+        ON obligation_settlements(obligation_id, payment_date);
+
+        CREATE TABLE IF NOT EXISTS accounts (
+        id TEXT PRIMARY KEY,
+        name TEXT UNIQUE NOT NULL,
+        type TEXT NOT NULL,
+        balance REAL DEFAULT 0,
+        currency TEXT DEFAULT 'INR',
+        credit_limit REAL,
+        outstanding REAL DEFAULT 0,
+        is_liability INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        metadata TEXT DEFAULT '{}'
+        );
+        
+        CREATE INDEX IF NOT EXISTS idx_accounts_type ON accounts(type);
+        CREATE INDEX IF NOT EXISTS idx_accounts_liability ON accounts(is_liability);
+        
+        CREATE TABLE IF NOT EXISTS account_transactions (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        amount REAL NOT NULL,
+        type TEXT NOT NULL,
+        category TEXT,
+        description TEXT,
+        transaction_date TEXT NOT NULL,
+        notes TEXT DEFAULT '',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+        
+        CREATE INDEX IF NOT EXISTS idx_account_tx_account ON account_transactions(account_id, transaction_date);
+        CREATE INDEX IF NOT EXISTS idx_account_tx_date ON account_transactions(transaction_date);
+        CREATE INDEX IF NOT EXISTS idx_account_tx_category ON account_transactions(category);
     `);
 
     console.log("[SYSTEM] 🧠 SQLite (LibSQL) Memory Graph & Master Schema Initialized.");

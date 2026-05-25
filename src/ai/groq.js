@@ -11,43 +11,55 @@ import db from '../config/database.js'
 import { webSearch } from '../tools/search.js'
 import { log } from '../utils/log.js'
 import { manageJournal } from '../tools/journal.js'
-
-// Simple in-memory queue and reply storage
-const jobQueue = [];
-let processing = false;
-const pendingReplies = new Map();
-
-function enqueue(name, fn) {
-  jobQueue.push({ name, fn });
-  if (!processing) processQueue();
-}
-
-async function processQueue() {
-  if (processing) return;
-  processing = true;
-  while (jobQueue.length) {
-    const job = jobQueue.shift();
-    try {
-      log.info(`[QUEUE] Running ${job.name}`);
-      await job.fn();
-      await new Promise(r => setTimeout(r, 500));
-    } catch (err) {
-      log.error(`[QUEUE] ${job.name} failed:`, err.message);
-    }
-  }
-  processing = false;
-}
+import {
+  createObligation,
+  recordSettlement,
+  queryObligations,
+  updateBalance,
+  getObligationDetail,
+} from '../tools/obligations.js'
 
 // ── Clients ───────────────────────────────────────────────────────────────────
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 const gemini = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
 
-// ── Context cache — keyed by INTENT, not single key ──────────────────────────
-// Prevents finance questions from getting task-optimised context and vice versa
+// ── Background queue ──────────────────────────────────────────────────────────
+
+const jobQueue = []
+let processing = false
+const pendingReplies = new Map()
+
+function enqueue(name, fn) {
+  jobQueue.push({ name, fn })
+  if (!processing) processQueue()
+}
+
+async function processQueue() {
+  if (processing) return
+  processing = true
+  while (jobQueue.length) {
+    const job = jobQueue.shift()
+    try {
+      log.info(`[QUEUE] Running ${job.name}`)
+      await job.fn()
+      await new Promise(r => setTimeout(r, 500))
+    } catch (err) {
+      log.error(`[QUEUE] ${job.name} failed:`, err.message)
+    }
+  }
+  processing = false
+}
+
+async function storeDelayedResponse(sessionId, reply) {
+  pendingReplies.set(sessionId, reply)
+  log.info(`[BACKGROUND] Stored reply for ${sessionId}`)
+}
+
+// ── Context cache — keyed by intent ──────────────────────────────────────────
 
 const contextCache = new Map()
-const CACHE_TTL = 60_000 // 60 seconds
+const CACHE_TTL = 60_000
 
 async function getCachedContext(prompt, intent) {
   const cacheKey = intent ?? 'general'
@@ -58,7 +70,7 @@ async function getCachedContext(prompt, intent) {
   return value
 }
 
-// ── Tool definitions — grouped by intent ─────────────────────────────────────
+// ── Tool definitions ──────────────────────────────────────────────────────────
 
 const TOOL_DEFS = {
   memory: [
@@ -160,10 +172,7 @@ const TOOL_DEFS = {
       function: {
         name: 'get_recent_transactions',
         description: 'Fetch recent transactions.',
-        parameters: {
-          type: 'object',
-          properties: { limit: { type: 'integer' } },
-        },
+        parameters: { type: 'object', properties: { limit: { type: 'integer' } } },
       },
     },
     {
@@ -178,6 +187,91 @@ const TOOL_DEFS = {
             tab_name: { type: 'string' },
           },
           required: ['spreadsheet_id', 'tab_name'],
+        },
+      },
+    },
+  ],
+
+  obligations: [
+    {
+      type: 'function',
+      function: {
+        name: 'create_obligation',
+        description: 'Create a financial obligation between two parties — loans, credit cards, debts, rent, bills.',
+        parameters: {
+          type: 'object',
+          properties: {
+            from: { type: 'string', description: 'Who owes (e.g., "me", "Ramesh", "Kotak Bank").' },
+            to: { type: 'string', description: 'Who is owed.' },
+            amount: { type: 'number' },
+            currency: { type: 'string', default: 'INR' },
+            due_date: { type: 'string', description: 'YYYY-MM-DD (optional).' },
+            installments: { type: 'integer', description: 'Number of installments (default 1).' },
+            purpose: { type: 'string', description: 'loan, credit_card, rent, bill, personal_debt, investment, subscription.' },
+            notes: { type: 'string' },
+          },
+          required: ['from', 'to', 'amount', 'purpose'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'record_settlement',
+        description: 'Record a payment towards an obligation (full or partial).',
+        parameters: {
+          type: 'object',
+          properties: {
+            obligation_id: { type: 'string' },
+            amount_paid: { type: 'number' },
+            payment_date: { type: 'string', description: 'YYYY-MM-DD (default: today).' },
+            from_account: { type: 'string' },
+            notes: { type: 'string' },
+          },
+          required: ['obligation_id', 'amount_paid'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'query_obligations',
+        description: 'Query current obligations. Use for "How much does X owe me?" or "What do I owe X?"',
+        parameters: {
+          type: 'object',
+          properties: {
+            party: { type: 'string', description: 'Name of party. Leave empty for all.' },
+            type: { type: 'string', enum: ['creditor', 'debtor', 'any'], description: 'creditor = they owe me, debtor = I owe them.' },
+            status: { type: 'string', enum: ['active', 'settled', 'any'], default: 'active' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_obligation_detail',
+        description: 'Get full history of a single obligation with all payments.',
+        parameters: {
+          type: 'object',
+          properties: { obligation_id: { type: 'string' } },
+          required: ['obligation_id'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'update_balance',
+        description: 'Update account or asset balance. Use for bank balances and wallet amounts — NOT obligations.',
+        parameters: {
+          type: 'object',
+          properties: {
+            account: { type: 'string', description: 'Account name (e.g., "Kotak", "Slice", "Cash").' },
+            amount: { type: 'number', description: 'Current balance.' },
+            currency: { type: 'string', default: 'INR' },
+          },
+          required: ['account', 'amount'],
         },
       },
     },
@@ -322,36 +416,33 @@ const TOOL_DEFS = {
   ],
 }
 
-// ── Intent classifier — zero tokens, pure regex ───────────────────────────────
+// ── Intent classifier ─────────────────────────────────────────────────────────
 
 function classifyIntent(prompt) {
-  const p = prompt.toLowerCase();
-  
-  // Journal
-  if (/journal|diary|write.*entry|entry.*write|mood|reflection/i.test(p)) return 'journal';
-  
-  // Finance
-  if (/spent|paid|expense|₹|\brs\b|transaction|finance|budget|inflow|outflow|credit|debit|kotak|account|balance|invest/i.test(p)) return 'finance';
-  
-  // Tasks – ADDED "mark.*done", "complete", "finish", "tick", "check off", "done"
-  if (/task|todo|to-do|remind|bill|event|watch(list)?|movie|series|show|mark.*done|complete|finish|tick|check off|^done$/i.test(p)) return 'tasks';
-  
-  // Memory
-  if (/remember|who is|what is|my name|my.*prefer|save.*fact|forget|memory/i.test(p)) return 'memory';
-  
-  // Search
-  if (/search|look up|latest|news|current|today.*weather|price of/i.test(p)) return 'search';
+  const p = prompt.toLowerCase()
 
-  // ADD THIS ↓
-  if (/tell me about|who (is|was)|what (is|was)|explain|describe/i.test(p)) return 'search'
-  
-  return 'general';
+  if (/journal|diary|write.*entry|entry.*write|mood|reflection/i.test(p)) return 'journal'
+
+  // Obligations — catches debt/loan/owe language before generic finance
+  if (/\blent\b|\bowed\b|\bowe\b|\bdebt\b|\binstallment\b|\bpay back\b|\bowes me\b|\bowes kv\b|outstanding|remaining|owe.*how much|how much.*owe|who.*owe|owe.*who/i.test(p)) return 'finance'
+
+  if (/spent|paid|expense|₹|\brs\b|transaction|finance|budget|inflow|outflow|credit|debit|kotak|account|balance|invest|slice|transfer/i.test(p)) return 'finance'
+
+  if (/task|todo|to-do|remind|bill|event|watch(list)?|movie|series|show|mark.*done|complete|finish|tick|check off|^done$/i.test(p)) return 'tasks'
+
+  if (/remember|who is|what is|my name|my.*prefer|save.*fact|forget|memory/i.test(p)) return 'memory'
+
+  if (/search|look up|latest|news|current|today.*weather|price of|tell me about|who (is|was)|what (is|was)|explain|describe/i.test(p)) return 'search'
+
+  return 'general'
 }
+
+// ── Tool routing ──────────────────────────────────────────────────────────────
 
 function getToolsForIntent(intent) {
   switch (intent) {
     case 'journal':  return TOOL_DEFS.journal
-    case 'finance':  return [...TOOL_DEFS.finance, ...TOOL_DEFS.memory]
+    case 'finance':  return [...TOOL_DEFS.finance, ...TOOL_DEFS.obligations, ...TOOL_DEFS.memory]
     case 'tasks':    return [...TOOL_DEFS.tasks, ...TOOL_DEFS.memory]
     case 'memory':   return TOOL_DEFS.memory
     case 'search':   return TOOL_DEFS.search
@@ -359,25 +450,18 @@ function getToolsForIntent(intent) {
   }
 }
 
-// ── System prompt — rules only, no examples ───────────────────────────────────
+// ── System prompt ─────────────────────────────────────────────────────────────
 
-function buildSystemPrompt(liveContext, today, minimal = false, intent = 'general') {
+function buildSystemPrompt(liveContext, today, minimal = false) {
   const now = new Date()
   const tomorrowDate = new Date(now)
   tomorrowDate.setDate(now.getDate() + 1)
   const tomorrow = tomorrowDate.toISOString().split('T')[0]
 
-  // Timezone
-  const offsetMinutes = -now.getTimezoneOffset()
-  const offsetHours = Math.floor(Math.abs(offsetMinutes) / 60)
-  const offsetMins = Math.abs(offsetMinutes) % 60
-  const offsetSign = offsetMinutes >= 0 ? '+' : '-'
-  const userTimezone = `${offsetSign}${String(offsetHours).padStart(2, '0')}:${String(offsetMins).padStart(2, '0')}`
-
   if (minimal) {
     return `You are Sia, kv's personal agent. Today is ${today}.
-Be conversational. Answer naturally. No filler.
-${liveContext ? `\nCONTEXT:\n${liveContext}` : ''}`
+    Be conversational. Answer naturally. No filler.
+    ${liveContext ? `\nCONTEXT:\n${liveContext}` : ''}`
   }
 
   return `You are Sia — kv's personal agent. Not a chatbot. Today is ${today}.
@@ -404,11 +488,17 @@ TRANSACTION RULES:
 - State what you'll log, wait for confirmation. Then log and confirm specifically.
 - Never ask for info you can infer from memory.
 
+OBLIGATIONS:
+- "Slice balance is 5335" → update_balance(account='Slice', amount=5335) — NOT create_obligation.
+- "I lent 5000 to Ramesh" → create_obligation(from='Ramesh', to='me', amount=5000, purpose='loan').
+- "Kotak CC outstanding 12289" → create_obligation(from='me', to='Kotak Bank', amount=12289, purpose='credit_card').
+- On creation confirm: "Ramesh owes ₹5,000." On settlement confirm: "₹2,000 recorded. ₹3,000 remaining."
+
 TOOL DISCIPLINE:
 - Simple questions answerable from context: NO tools.
 - Never call get_context on greetings or casual messages.
 
-REMINDER RULE: Always store times as ISO 8601: "1pm today" = "${today}T13:00:00${userTimezone}". "tomorrow 9am" = "${tomorrow}T09:00:00${userTimezone}".
+REMINDER RULE: Always store times as ISO 8601: "1pm today" = "${today}T13:00:00". "tomorrow 9am" = "${tomorrow}T09:00:00".
 
 ${liveContext}`
 }
@@ -454,6 +544,11 @@ async function executeTool(name, args, messageId) {
       case 'web_search':              return await webSearch(args)
       case 'get_context':             return await getContext()
       case 'sync_dashboard_memory':   return await syncDashboardMemory(args)
+      case 'create_obligation':       return await createObligation(args)
+      case 'record_settlement':       return await recordSettlement(args)
+      case 'query_obligations':       return await queryObligations(args)
+      case 'get_obligation_detail':   return await getObligationDetail(args)
+      case 'update_balance':          return await updateBalance(args)
       default:
         return { status: 'Failed', error: `Unknown tool: ${name}` }
     }
@@ -476,23 +571,21 @@ function isSimpleMessage(prompt) {
   return simple.some(r => r.test(prompt.trim()))
 }
 
-// ── Gemini call — used for simple messages AND as Groq fallback ───────────────
+// ── Gemini — simple messages + fallback ──────────────────────────────────────
 
 async function callGemini(messages, systemPrompt) {
   const model = gemini.getGenerativeModel({
-    model: 'gemini-2.5-flash-lite',         // updated model string
+    model: 'gemini-2.5-flash-lite',
     systemInstruction: systemPrompt,
-    tools: [{ googleSearch: {} }],  
+    tools: [{ googleSearch: {} }],
   })
 
-  // Filter to user/assistant only — Gemini rejects system + tool messages
   const conversational = messages.filter(
     m => (m.role === 'user' || m.role === 'assistant') &&
          typeof m.content === 'string' &&
          m.content.trim().length > 0
   )
 
-  // Gemini requires history to start with user role
   while (conversational.length > 0 && conversational[0].role === 'assistant') {
     conversational.shift()
   }
@@ -510,7 +603,6 @@ async function callGemini(messages, systemPrompt) {
     const result = await chat.sendMessage(lastMessage?.content ?? '')
     return result.response.text()
   } catch {
-    // If history causes issues, bare call with no history
     log.warn('Gemini with history failed, retrying bare')
     const chat = model.startChat({ history: [] })
     const result = await chat.sendMessage(lastMessage?.content ?? '')
@@ -518,7 +610,7 @@ async function callGemini(messages, systemPrompt) {
   }
 }
 
-// ── Groq call — throws immediately on error, no retry ────────────────────────
+// ── Groq ──────────────────────────────────────────────────────────────────────
 
 async function callGroq(messages, tools = null) {
   const params = {
@@ -529,32 +621,18 @@ async function callGroq(messages, tools = null) {
   if (tools) {
     params.tools = tools
     params.tool_choice = 'auto'
-    params.response_format = { type: 'text' }  
+    params.parallel_tool_calls = false  // one tool at a time — more reliable
   }
   return await groq.chat.completions.create(params)
 }
-// ── Background decision ─────────────────────────────────────────────
-function needsBackground(prompt, intent) {
-  // Tasks that can wait (e.g., long analysis, syncs, weekly reports)
-  const backgroundIntents = ['finance_sync', 'weekly_report', 'memory_enrichment'];
-  return backgroundIntents.includes(intent);
+
+// ── Background ────────────────────────────────────────────────────────────────
+
+function needsBackground(intent) {
+  return ['finance_sync', 'weekly_report', 'memory_enrichment'].includes(intent)
 }
 
-// Simple in-memory storage for delayed replies (or use DB)
-async function storeDelayedResponse(sessionId, reply) {
-  pendingReplies.set(sessionId, reply);
-  // Optional: send via webhook later – for now just store
-  console.log(`[BACKGROUND] Stored reply for ${sessionId}`);
-}
-
-// ── OpenRouter free model (Nemotron) ───────────────────────────────
 async function callOpenRouterFree(messages, systemPrompt) {
-  const MODEL_ID = 'nvidia/nemotron-3-nano-30b-a3b:free';
-  const formattedMessages = [
-    { role: 'system', content: systemPrompt },
-    ...messages.filter(m => m.role !== 'system')
-  ];
-
   const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -562,202 +640,184 @@ async function callOpenRouterFree(messages, systemPrompt) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: MODEL_ID,
-      messages: formattedMessages,
+      model: 'nvidia/nemotron-3-nano-30b-a3b:free',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...messages.filter(m => m.role !== 'system')
+      ],
       max_tokens: 1024,
       temperature: 0.7,
     }),
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`OpenRouter error ${response.status}: ${err}`);
-  }
-  const data = await response.json();
-  return data.choices[0].message.content;
+  })
+  if (!response.ok) throw new Error(`OpenRouter ${response.status}: ${await response.text()}`)
+  const data = await response.json()
+  return data.choices[0].message.content
 }
 
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 export async function generateResponse(prompt, messageId, sessionId = 'telegram-default') {
   try {
-    const today = new Date().toISOString().split('T')[0];
-    const simple = isSimpleMessage(prompt);
-    const intent = simple ? 'simple' : classifyIntent(prompt);
+    const today = new Date().toISOString().split('T')[0]
+    const simple = isSimpleMessage(prompt)
+    const intent = simple ? 'simple' : classifyIntent(prompt)
 
-
-    // ── Optimized "Mark as Done" Shortcut ────────────────────────────────────────
-// Captures variations like: mark 'buy milk' as done, complete buy milk, tick gym, check off laundry
-const markMatch = prompt.match(/^(?:mark\s+['"]?(.+?)['"]?\s+as\s+done|complete\s+['"]?(.+?)['"]?|tick\s+['"]?(.+?)['"]?|check\s+off\s+['"]?(.+?)['"]?)$/i);
-
-if (markMatch) {
-  // Extract whichever capture group caught the title string
-  const title = (markMatch[1] || markMatch[2] || markMatch[3] || markMatch[4])?.trim();
-  let updated = false;
-
-  if (title) {
-    // Try updating tasks table first
-    let result = await db.execute({
-      sql: `UPDATE tasks SET done = 1 WHERE title LIKE ? AND done = 0`,
-      args: [`%${title}%`]
-    });
-    
-    // Check both standard wrapper property variations for affected rows
-    if ((result.rowsAffected ?? result.affectedRows ?? 0) > 0) {
-      updated = true;
-    }
-
-    // If no task matched, try updating reminders table
-    if (!updated) {
-      result = await db.execute({
-        sql: `UPDATE reminders SET done = 1 WHERE title LIKE ? AND done = 0`,
-        args: [`%${title}%`]
-      });
-      if ((result.rowsAffected ?? result.affectedRows ?? 0) > 0) {
-        updated = true;
+    // ── Fast path: mark as done (no LLM needed) ───────────────────────────────
+    const markMatch = prompt.match(
+      /^(?:mark\s+['"]?(.+?)['"]?\s+as\s+done|complete\s+['"]?(.+?)['"]?|tick\s+['"]?(.+?)['"]?|check\s+off\s+['"]?(.+?)['"]?)$/i
+    )
+    if (markMatch) {
+      const title = (markMatch[1] || markMatch[2] || markMatch[3] || markMatch[4])?.trim()
+      if (title) {
+        let updated = false
+        let result = await db.execute({
+          sql: `UPDATE tasks SET done = 1 WHERE title LIKE ? AND done = 0`,
+          args: [`%${title}%`]
+        })
+        if ((result.rowsAffected ?? result.affectedRows ?? 0) > 0) updated = true
+        if (!updated) {
+          result = await db.execute({
+            sql: `UPDATE reminders SET done = 1 WHERE title LIKE ? AND done = 0`,
+            args: [`%${title}%`]
+          })
+          if ((result.rowsAffected ?? result.affectedRows ?? 0) > 0) updated = true
+        }
+        const reply = updated ? `✓ "${title}" done.` : `No pending task or reminder matched "${title}".`
+        await saveHistory(sessionId, 'user', prompt)
+        await saveHistory(sessionId, 'assistant', reply)
+        return reply
       }
     }
 
-    const reply = updated ? `✓ Marked "${title}" as done.` : `No pending task or reminder matched "${title}".`;
-    await saveHistory(sessionId, 'user', prompt);
-    await saveHistory(sessionId, 'assistant', reply);
-    return reply;
-  }
-}
-    
-    // ── BACKGROUND PATH: for slow, non-interactive tasks ──────────────
-    if (!simple && needsBackground(prompt, intent)) {
-      // We need messages and systemPrompt – build them first
-      const historyLimit = 3; // shorter history for background
-      const history = await loadHistory(sessionId, historyLimit);
-      const liveContext = await getCachedContext(prompt, intent);
-      const systemPromptBg = buildSystemPrompt(liveContext, today, false,intent);
+    // ── Background path ───────────────────────────────────────────────────────
+    if (!simple && needsBackground(intent)) {
+      const history = await loadHistory(sessionId, 3)
+      const liveContext = await getCachedContext(prompt, intent)
+      const systemPromptBg = buildSystemPrompt(liveContext, today)
       const messagesBg = [
         { role: 'system', content: systemPromptBg },
         ...history,
         { role: 'user', content: prompt },
-      ];
-
+      ]
       enqueue(`${sessionId}-${Date.now()}`, async () => {
         try {
-          const reply = await callOpenRouterFree(messagesBg, systemPromptBg);
-          await saveHistory(sessionId, 'assistant', reply);
-          await storeDelayedResponse(sessionId, reply);
-          // Optionally send via Telegram webhook if you have bot instance
+          const reply = await callOpenRouterFree(messagesBg, systemPromptBg)
+          await saveHistory(sessionId, 'user', prompt)
+          await saveHistory(sessionId, 'assistant', reply)
+          await storeDelayedResponse(sessionId, reply)
         } catch (err) {
-          log.error(`Background job failed: ${err.message}`);
+          log.error(`Background job failed: ${err.message}`)
         }
-      });
-      return "🔄 I'm working on that in the background. I'll notify you when it's ready.";
+      })
+      return '🔄 On it. I\'ll have that ready shortly.'
     }
 
-    // ── NORMAL PATH: determine history length ────────────────────────
-    const historyLimit = simple ? 2 : (intent === 'general' ? 6 : 3);
-    const history = await loadHistory(sessionId, historyLimit);
-    const liveContext = simple ? '' : await getCachedContext(prompt, intent);
-    const systemPrompt = buildSystemPrompt(liveContext, today, simple, intent);
+    // ── Build messages ────────────────────────────────────────────────────────
+    const historyLimit = simple ? 2 : (intent === 'general' ? 6 : 3)
+    const history = await loadHistory(sessionId, historyLimit)
+    const liveContext = simple ? '' : await getCachedContext(prompt, intent)
+    const systemPrompt = buildSystemPrompt(liveContext, today, simple)
 
     const messages = [
       { role: 'system', content: systemPrompt },
       ...history,
       { role: 'user', content: prompt },
-    ];
+    ]
 
-    log.agent(`Session: ${sessionId} | Intent: ${intent} | "${prompt.slice(0, 50)}"`);
+    log.agent(`Session: ${sessionId} | Intent: ${intent} | "${prompt.slice(0, 50)}"`)
 
-    // ── SIMPLE MESSAGES → Gemini (fast, cheap) ────────────────────────
+    // ── Simple → Gemini ───────────────────────────────────────────────────────
     if (simple) {
       try {
-        log.warn(`Calling Gemini for simple message in session ${sessionId}`);
-        const reply = await callGemini(messages, systemPrompt);
-        const cleaned = reply?.trim() || '.';
-        await saveHistory(sessionId, 'user', prompt);
-        await saveHistory(sessionId, 'assistant', cleaned);
-        return cleaned;
+        log.info(`Simple message — routing to Gemini | Session: ${sessionId}`)
+        const reply = await callGemini(messages, systemPrompt)
+        const cleaned = reply?.trim() || '.'
+        await saveHistory(sessionId, 'user', prompt)
+        await saveHistory(sessionId, 'assistant', cleaned)
+        return cleaned
       } catch (geminiErr) {
-        log.warn('Gemini simple path failed, falling back to Groq:', geminiErr?.message);
+        log.warn('Gemini simple path failed, falling back to Groq:', geminiErr?.message)
+        // fall through to Groq below
       }
     }
 
-
-    
-    // ── TOOL INTENTS or fallback from Nemotron → Groq ─────────────────
+    // ── Tool intents → Groq ───────────────────────────────────────────────────
     try {
-      const selectedTools = getToolsForIntent(intent);
-      const response = await callGroq(messages, selectedTools);
-      const responseMessage = response.choices[0].message;
+      const selectedTools = getToolsForIntent(intent)
+      const response = await callGroq(messages, selectedTools)
+      const responseMessage = response.choices[0].message
 
       if (responseMessage.tool_calls) {
-        messages.push(responseMessage);
+        messages.push(responseMessage)
         for (const toolCall of responseMessage.tool_calls) {
-          const args = JSON.parse(toolCall.function.arguments);
-          const result = await executeTool(toolCall.function.name, args, messageId);
+          const args = JSON.parse(toolCall.function.arguments)
+          const result = await executeTool(toolCall.function.name, args, messageId)
           messages.push({
             tool_call_id: toolCall.id,
             role: 'tool',
             name: toolCall.function.name,
             content: JSON.stringify(result),
-          });
+          })
         }
         const finalResponse = await groq.chat.completions.create({
           model: 'llama-3.1-8b-instant',
           messages,
           max_tokens: 512,
-        });
-        const reply = finalResponse.choices[0].message.content || 'Done.';
+        })
+        const reply = finalResponse.choices[0].message.content || 'Done.'
         if (prompt.length > 3 && reply.length > 3) {
-          await saveHistory(sessionId, 'user', prompt);
-          await saveHistory(sessionId, 'assistant', reply);
+          await saveHistory(sessionId, 'user', prompt)
+          await saveHistory(sessionId, 'assistant', reply)
         }
-        return reply;
+        return reply
       }
 
+      // Direct response — check for accidental raw JSON
       let reply = responseMessage.content || '.'
-
       if (reply.trim().startsWith('{') && reply.includes('"function"')) {
+        log.warn('Model returned raw JSON instead of tool_calls — rephrasing')
         const rephrase = await groq.chat.completions.create({
           model: 'llama-3.1-8b-instant',
           messages: [
             { role: 'system', content: buildSystemPrompt('', today, true) },
             { role: 'user', content: prompt },
-            { role: 'assistant', content: 'I need to process this request.' },
-            { role: 'user', content: 'Please respond in plain conversational text only. No JSON.' }
+            { role: 'user', content: 'Respond in plain conversational text only. No JSON.' }
           ],
           max_tokens: 256,
         })
         reply = rephrase.choices[0].message.content || '.'
       }
-      await saveHistory(sessionId, 'user', prompt);
-      await saveHistory(sessionId, 'assistant', reply);
-      return reply;
+
+      await saveHistory(sessionId, 'user', prompt)
+      await saveHistory(sessionId, 'assistant', reply)
+      return reply
 
     } catch (groqError) {
-  const isTransient = groqError?.status === 429 || groqError?.status >= 500;
-  const isToolFailure = groqError?.message?.includes('tool_use_failed');
-  if (!isTransient && !isToolFailure) {
-    log.error('Groq non-retriable error:', groqError?.message);
-    return 'Something went wrong on my end. Try again.';
-  }
-  log.warn(`Groq failed (${groqError?.status}) — trying Gemini`);
-  // Then proceed to Gemini fallback
-}
+      const isTransient = groqError?.status === 429 || groqError?.status >= 500
+      const isToolFailure = groqError?.message?.includes('tool_use_failed')
+      if (!isTransient && !isToolFailure) {
+        log.error('Groq non-retriable error:', groqError?.message)
+        return 'Something went wrong on my end. Try again.'
+      }
+      log.warn(`Groq failed (${groqError?.status}) — trying Gemini`)
+    }
 
-    // ── FINAL FALLBACK: Gemini ────────────────────────────────────────
+    // ── Gemini fallback ───────────────────────────────────────────────────────
     try {
-      await new Promise(r => setTimeout(r, 500));
-      console.log(`[FALLBACK] Calling Gemini for session ${sessionId}`);
-      const reply = await callGemini(messages, systemPrompt);
-      const cleaned = reply?.trim() || 'Done.';
-      await saveHistory(sessionId, 'user', prompt);
-      await saveHistory(sessionId, 'assistant', cleaned);
-      return cleaned;
+      await new Promise(r => setTimeout(r, 500))
+      log.info(`[FALLBACK] Gemini for session ${sessionId}`)
+      const reply = await callGemini(messages, systemPrompt)
+      const cleaned = reply?.trim() || 'Done.'
+      await saveHistory(sessionId, 'user', prompt)
+      await saveHistory(sessionId, 'assistant', cleaned)
+      return cleaned
     } catch (geminiError) {
-      log.error('Gemini fallback also failed:', geminiError?.message);
-      return 'Both services are temporarily unavailable. Try again in a moment.';
+      log.error('Gemini fallback also failed:', geminiError?.message)
+      return 'Both services are temporarily unavailable. Try again in a moment.'
     }
 
   } catch (error) {
-    log.error('Agent error:', error?.message ?? error);
-    return 'Something went wrong on my end. Try again.';
+    log.error('Agent error:', error?.message ?? error)
+    return 'Something went wrong on my end. Try again.'
   }
 }
