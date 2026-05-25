@@ -626,6 +626,46 @@ async function callGroq(messages, tools = null) {
   return await groq.chat.completions.create(params)
 }
 
+async function tryGroqOnly(messages, tools, userPrompt, sessionId) {
+  try {
+    const response = await callGroq(messages, tools)
+    const responseMessage = response.choices[0].message
+    
+    if (responseMessage.tool_calls) {
+      messages.push(responseMessage)
+      for (const toolCall of responseMessage.tool_calls) {
+        const args = JSON.parse(toolCall.function.arguments)
+        const result = await executeTool(toolCall.function.name, args, null)
+        messages.push({
+          tool_call_id: toolCall.id,
+          role: 'tool',
+          name: toolCall.function.name,
+          content: JSON.stringify(result),
+        })
+      }
+      const final = await groq.chat.completions.create({
+        model: 'llama-3.1-8b-instant',
+        messages,
+        max_tokens: 512,
+      })
+      let reply = final.choices[0].message.content || 'Done.'
+      reply = cleanRawToolCalls(reply)
+      await saveHistory(sessionId, 'user', userPrompt)
+      await saveHistory(sessionId, 'assistant', reply)
+      return cleanRawToolCalls(reply)
+    }
+    
+    let reply = responseMessage.content || '.'
+    reply = cleanRawToolCalls(reply)
+    await saveHistory(sessionId, 'user', userPrompt)
+    await saveHistory(sessionId, 'assistant', reply)
+    return cleanRawToolCalls(reply)
+  } catch (err) {
+    log.error(`Groq-only failed: ${err.message}`)
+    return null
+  }
+}
+
 // ── Background ────────────────────────────────────────────────────────────────
 
 function needsBackground(intent) {
@@ -656,11 +696,33 @@ async function callOpenRouterFree(messages, systemPrompt) {
 
 // ── Main entry point ──────────────────────────────────────────────────────────
 
+function cleanRawToolCalls(text) {
+  if (!text) return text
+  return text
+    .replace(/<function[^>]*>[\s\S]*?<\/function>/gi, '')
+    .replace(/<function[^>]*\/>/gi, '')
+    .replace(/`?\{"name":\s*"[^"]+",\s*"arguments":\s*\{[^}]*\}\s*\}`?/g, '')
+    .replace(/\[function[^\]]*\]/gi, '')
+    .replace(/I will (call|use) \w+\([^)]*\)/gi, '')
+    .trim()
+}
+
 export async function generateResponse(prompt, messageId, sessionId = 'telegram-default') {
   try {
     const today = new Date().toISOString().split('T')[0]
     const simple = isSimpleMessage(prompt)
     const intent = simple ? 'simple' : classifyIntent(prompt)
+
+    const toolIntents = ['memory', 'finance', 'tasks', 'journal']
+    if (toolIntents.includes(intent)) {
+      // Force Groq only for these intents
+      if (!process.env.GROQ_API_KEY) {
+        return "Memory and finance features need Groq. Set GROQ_API_KEY."
+      }
+      // Remove any fallback to Gemini later for this request
+      const groqResult = await tryGroqOnly(messages, selectedTools, prompt, sessionId)
+      if (groqResult) return groqResult
+    }
 
     // ── Fast path: mark as done (no LLM needed) ───────────────────────────────
     const markMatch = prompt.match(
@@ -685,7 +747,7 @@ export async function generateResponse(prompt, messageId, sessionId = 'telegram-
         const reply = updated ? `✓ "${title}" done.` : `No pending task or reminder matched "${title}".`
         await saveHistory(sessionId, 'user', prompt)
         await saveHistory(sessionId, 'assistant', reply)
-        return reply
+        return cleanRawToolCalls(reply)
       }
     }
 
@@ -769,7 +831,7 @@ export async function generateResponse(prompt, messageId, sessionId = 'telegram-
           await saveHistory(sessionId, 'user', prompt)
           await saveHistory(sessionId, 'assistant', reply)
         }
-        return reply
+        return cleanRawToolCalls(reply)
       }
 
       // Direct response — check for accidental raw JSON
@@ -790,7 +852,7 @@ export async function generateResponse(prompt, messageId, sessionId = 'telegram-
 
       await saveHistory(sessionId, 'user', prompt)
       await saveHistory(sessionId, 'assistant', reply)
-      return reply
+      return cleanRawToolCalls(reply)
 
     } catch (groqError) {
       const isTransient = groqError?.status === 429 || groqError?.status >= 500
