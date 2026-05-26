@@ -2,8 +2,7 @@ import { google } from 'googleapis';
 import { v4 as uuidv4 } from 'uuid';
 import db from '../config/database.js';
 import 'dotenv/config';
-
-import { upsertMemoryNode } from './memory.js';
+import { writeMemoryFile, readMemoryFile } from './memory.js';   // new file‑based memory
 
 const auth = new google.auth.GoogleAuth({
     keyFile: 'google-credentials.json',
@@ -14,7 +13,6 @@ export async function ingestGoogleSheet({ spreadsheet_id }) {
     try {
         const sheets = google.sheets({ version: 'v4', auth });
         
-        // 1. Dynamically fetch all tab names in the spreadsheet
         const sheetInfo = await sheets.spreadsheets.get({ spreadsheetId: spreadsheet_id });
         const tabs = sheetInfo.data.sheets.map(sheet => sheet.properties.title);
         
@@ -22,32 +20,27 @@ export async function ingestGoogleSheet({ spreadsheet_id }) {
         let processedTabs = [];
 
         const SKIP_TABS = ['dashboard', 'summary', 'overview', 'memory'];
-        // 2. Loop through every tab
         for (const tabName of tabs) {
-             if (SKIP_TABS.includes(tabName.toLowerCase())) {
+            if (SKIP_TABS.includes(tabName.toLowerCase())) {
                 console.log(`[SKIP] Ignoring tab: ${tabName}`);
                 continue;
             }
             const response = await sheets.spreadsheets.values.get({
                 spreadsheetId: spreadsheet_id,
-                range: `${tabName}!A:E`, // Assuming standard A-E columns
+                range: `${tabName}!A:E`,
             });
 
             const rows = response.data.values;
-            if (!rows || rows.length < 2) continue; // Skip empty sheets
+            if (!rows || rows.length < 2) continue;
 
             processedTabs.push(tabName);
 
-            // 3. Loop through rows and insert (skipping header)
             for (let i = 1; i < rows.length; i++) {
                 const row = rows[i];
-                
-               const sheetDate = row[0];       
-                const description = row[1];     
-                const type = row[2] || "outflow"; 
+                const sheetDate = row[0];
+                const description = row[1];
+                const type = row[2] || "outflow";
                 const account_source = row[3] || "unknown";
-                
-                // 1. Safely grab the amount as a string
                 const amountStr = String(row[4] || "");
 
                 if (!amountStr || !description) continue;
@@ -55,10 +48,9 @@ export async function ingestGoogleSheet({ spreadsheet_id }) {
                 const cleanedAmount = amountStr.replace(/[^0-9.-]+/g, "");
                 const amount = parseFloat(cleanedAmount);
                 
-                // --- MISSING SAFETY CHECK GOES HERE ---
                 if (isNaN(amount)) {
                     console.log(`[WARNING] Skipping row with invalid amount: ${amountStr}`);
-                    continue; 
+                    continue;
                 }
                 let sqlDate = new Date().toISOString();
                 if (sheetDate) {
@@ -66,8 +58,8 @@ export async function ingestGoogleSheet({ spreadsheet_id }) {
                     if (!isNaN(parsedDate)) sqlDate = parsedDate.toISOString();
                 }
 
-                const messageId = uuidv4(); 
-                const category = "Migrated"; 
+                const messageId = uuidv4();
+                const category = "Migrated";
 
                 await db.execute({
                     sql: `INSERT INTO transactions 
@@ -80,9 +72,9 @@ export async function ingestGoogleSheet({ spreadsheet_id }) {
             }
         }
 
-        return { 
-            status: "Success", 
-            data: `Migration complete. Inserted ${totalInserted} rows from tabs: ${processedTabs.join(', ')}.` 
+        return {
+            status: "Success",
+            data: `Migration complete. Inserted ${totalInserted} rows from tabs: ${processedTabs.join(', ')}.`
         };
 
     } catch (error) {
@@ -99,7 +91,6 @@ export async function syncDashboardMemory({ spreadsheet_id, tab_name }) {
     try {
         console.log(`[SYNC] Starting dynamic extraction for tab: ${tab_name}`);
 
-        // STEP 1 — Fetch raw rows
         const sheets = google.sheets({ version: 'v4', auth });
         const response = await sheets.spreadsheets.values.get({
             spreadsheetId: spreadsheet_id,
@@ -118,7 +109,6 @@ export async function syncDashboardMemory({ spreadsheet_id, tab_name }) {
 
         console.log(`[SYNC] Raw data fetched, ${rows.length} rows`);
 
-        // STEP 2 — Ask Groq to extract nodes
         const systemPrompt = `You are a financial data extraction engine.
 Rules:
 1. Infer context from headers and data structure. Do not hardcode column names.
@@ -159,7 +149,6 @@ Rules:
         const jsonText = groqData.choices[0].message.content.trim();
         console.log(`[SYNC] Groq responded, parsing JSON...`);
 
-        // STEP 3 — Parse + Upsert
         let extractedNodes;
         try {
             const parsed = JSON.parse(jsonText);
@@ -172,29 +161,25 @@ Rules:
             return { status: 'Failed', error: 'AI returned empty or invalid nodes array', raw: jsonText };
         }
 
-        let syncedCount = 0;
-        const syncedKeys = [];
-
+        // Write extracted entities to MEMORY.md (file‑based memory)
+        const timestamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
+        let memoryEntry = `\n## Synced from Google Sheets (${tab_name}) on ${timestamp}\n`;
         for (const node of extractedNodes) {
-            if (!node.canonical_key || !node.type || !node.metadata) {
-                console.warn("[WARNING] Skipping malformed node:", node);
-                continue;
-            }
-
-            await upsertMemoryNode({
-                canonical_key: node.canonical_key,
-                label: node.label || node.canonical_key,
-                type: node.type,
-                metadata: node.metadata
-            });
-
-            syncedCount++;
-            syncedKeys.push(node.canonical_key);
-            console.log(`[SYNC] Upserted: ${node.canonical_key}`);
+            if (!node.canonical_key || !node.type) continue;
+            const label = node.label || node.canonical_key;
+            const meta = node.metadata || {};
+            const metaStr = Object.entries(meta).map(([k, v]) => `${k}:${v}`).join(', ');
+            memoryEntry += `- **${label}** (${node.type}) – ${metaStr}\n`;
         }
 
-        console.log(`[SYNC] Done. ${syncedCount} nodes synced.`);
-        return { status: 'Success', nodes_synced: syncedCount, keys: syncedKeys };
+        // Append to MEMORY.md (environment memory)
+        const result = await writeMemoryFile('env', 'append', memoryEntry);
+        if (result.status === 'error') {
+            return { status: 'Failed', error: result.error };
+        }
+
+        console.log(`[SYNC] Done. ${extractedNodes.length} entities written to MEMORY.md.`);
+        return { status: 'Success', entities_synced: extractedNodes.length, memory_file: 'MEMORY.md' };
 
     } catch (error) {
         console.error("[SYNC] Dashboard Sync Error:", error);
