@@ -18,6 +18,7 @@ import memoryRoutes   from './src/routes/memory.routes.js';
 import adminRoutes    from './src/routes/admin.routes.js';
 import journalRoutes from './src/routes/journal.routes.js';
 import dataRoutes from './src/routes/data.routes.js'
+import { initMemoryFiles } from './src/tools/memory.js';
 
 
 import { requestLogger, consoleLogger } from './src/middleware/logger.js';
@@ -57,6 +58,7 @@ const PORT = process.env.PORT || 3000;
 
 async function start() {
   await initializeDatabase();
+  await initMemoryFiles();
   
   app.listen(PORT, () => {
     console.log(`[SIA] Running on http://localhost:${PORT}`);

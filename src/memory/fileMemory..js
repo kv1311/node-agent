@@ -1,36 +1,35 @@
 import fs from 'fs/promises';
 import path from 'path';
-import db from '../config/database.js';
+import os from 'os';
 
-// Use project root directory (where the main process runs)
-const PROJECT_ROOT = process.cwd();
-const MEMORIES_DIR = path.join(PROJECT_ROOT, 'memories');
+const SIA_HOME = path.join(os.homedir(), '.sia');
+const MEMORIES_DIR = path.join(SIA_HOME, 'memories');
 const USER_FILE = path.join(MEMORIES_DIR, 'USER.md');
 const ENV_FILE = path.join(MEMORIES_DIR, 'MEMORY.md');
 
-const MAX_USER_SIZE = 1400;
+const MAX_USER_SIZE = 1400;    // characters
 const MAX_ENV_SIZE = 2200;
 
+// Ensure directories exist
 export async function initMemoryFiles() {
   await fs.mkdir(MEMORIES_DIR, { recursive: true });
-  for (const [file, defaultContent] of [
-    [USER_FILE, '# User Profile\n\n(Your name, preferences, rules, etc.)\n'],
-    [ENV_FILE, '# Environment Memory\n\n(Active projects, facts, workarounds)\n']
-  ]) {
+  for (const file of [USER_FILE, ENV_FILE]) {
     try {
       await fs.access(file);
     } catch {
-      await fs.writeFile(file, defaultContent);
+      await fs.writeFile(file, '# Empty memory file\n\n');
     }
   }
 }
 
+// Read a memory file
 export async function readMemoryFile(type) {
   const file = type === 'user' ? USER_FILE : ENV_FILE;
   const content = await fs.readFile(file, 'utf-8');
   return { status: 'success', content };
 }
 
+// Write to memory file with size enforcement
 export async function writeMemoryFile(type, operation, data) {
   const file = type === 'user' ? USER_FILE : ENV_FILE;
   const maxSize = type === 'user' ? MAX_USER_SIZE : MAX_ENV_SIZE;
@@ -40,8 +39,8 @@ export async function writeMemoryFile(type, operation, data) {
   if (operation === 'append') {
     newContent = current + '\n' + data;
   } else if (operation === 'replace_line') {
-    const [lineNum, newLine] = data.split('|');
     const lines = current.split('\n');
+    const [lineNum, newLine] = data.split('|');
     lines[parseInt(lineNum)] = newLine;
     newContent = lines.join('\n');
   } else if (operation === 'remove_line') {
@@ -49,9 +48,10 @@ export async function writeMemoryFile(type, operation, data) {
     lines.splice(parseInt(data), 1);
     newContent = lines.join('\n');
   } else {
-    return { status: 'error', error: 'Invalid operation. Use append, replace_line, or remove_line.' };
+    return { status: 'error', error: 'Invalid operation' };
   }
 
+  // Enforce size limit
   if (newContent.length > maxSize) {
     return { status: 'error', error: `Memory would exceed ${maxSize} chars. Compress first.` };
   }
@@ -59,31 +59,14 @@ export async function writeMemoryFile(type, operation, data) {
   return { status: 'success', details: `Updated ${type} memory.` };
 }
 
-export async function searchSessions({ query, limit = 5 }) {
-  try {
-    const result = await db.execute({
-      sql: `SELECT snippet(conversations_fts, -1, '…', '…', '…', 60) as snippet,
-                   session_id, datetime(created_at, 'localtime') as when
-            FROM conversations_fts
-            JOIN conversations ON conversations.rowid = conversations_fts.rowid
-            WHERE conversations_fts MATCH ?
-            ORDER BY rank
-            LIMIT ?`,
-      args: [query, limit]
-    });
-    return { status: 'success', results: result.rows };
-  } catch (err) {
-    return { status: 'error', error: err.message };
-  }
-}
-
-export async function compressMemory(type, summarizerFn) {
+// Compress memory file (ask LLM to summarise)
+export async function compressMemory(type, llmSummarizeFn) {
   const file = type === 'user' ? USER_FILE : ENV_FILE;
   const maxSize = type === 'user' ? MAX_USER_SIZE : MAX_ENV_SIZE;
   const content = await fs.readFile(file, 'utf-8');
   if (content.length <= maxSize) return { status: 'success', message: 'No compression needed' };
-  if (!summarizerFn) return { status: 'error', error: 'No summarizer provided' };
-  const summary = await summarizerFn(content, maxSize);
+
+  const summary = await llmSummarizeFn(content, maxSize);
   await fs.writeFile(file, summary);
   return { status: 'success', details: 'Memory compressed.' };
 }

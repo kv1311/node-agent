@@ -189,6 +189,21 @@ export async function initializeDatabase() {
         CREATE INDEX IF NOT EXISTS idx_account_tx_account ON account_transactions(account_id, transaction_date);
         CREATE INDEX IF NOT EXISTS idx_account_tx_date ON account_transactions(transaction_date);
         CREATE INDEX IF NOT EXISTS idx_account_tx_category ON account_transactions(category);
+        -- Full‑text search for conversations
+        CREATE VIRTUAL TABLE IF NOT EXISTS conversations_fts USING fts5(content, session_id, tokenize='porter');
+
+        -- Triggers to keep FTS in sync
+        CREATE TRIGGER IF NOT EXISTS conversations_ai AFTER INSERT ON conversations BEGIN
+        INSERT INTO conversations_fts(rowid, content, session_id) VALUES (new.rowid, new.content, new.session_id);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS conversations_ad AFTER DELETE ON conversations BEGIN
+        INSERT INTO conversations_fts(conversations_fts, rowid, content, session_id) VALUES('delete', old.rowid, old.content, old.session_id);
+        END;
+
+        -- Backfill existing conversations
+        INSERT OR IGNORE INTO conversations_fts(rowid, content, session_id)
+        SELECT rowid, content, session_id FROM conversations WHERE rowid NOT IN (SELECT rowid FROM conversations_fts);
     `);
 
     console.log("[SYSTEM] 🧠 SQLite (LibSQL) Memory Graph & Master Schema Initialized.");
